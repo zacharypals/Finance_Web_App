@@ -44,6 +44,30 @@ https://zacharypals.github.io/Finance_Web_App/
 
 **Phase 0 is done when:** you can sign in on your computer and phone and see the four Phase 0 checks, and signing in with any other Google account shows "That Google account isn't allowed."
 
+## Phase 1 deploy (Plaid)
+
+From the `worker` folder:
+
+```powershell
+wrangler d1 migrations apply finance-db --remote   # applies 0002_plaid_sync.sql
+wrangler deploy                                     # also registers the hourly sync cron
+```
+
+Then push the repo (new `index.html` / `config.js`) and open **Settings** in the app.
+
+**Sandbox test logins** (Plaid's fake banks):
+- Pick any bank, e.g. "First Platypus Bank" — username `user_good`, password `pass_good`, MFA code `1234` if asked.
+- "Platypus OAuth Bank" tests the Chase/Wells-style redirect flow.
+- Transactions can take a minute or two to appear after linking — press **Sync now** again.
+
+**Going live (Trial plan, real banks):** remove the Sandbox test connections in the app first, then:
+
+```powershell
+wrangler secret put PLAID_SECRET        # paste the Production secret
+```
+
+change `PLAID_ENV = "production"` in `wrangler.toml`, and `wrangler deploy`.
+
 ## Conventions
 
 - Version lives in two places and must match: the `<!-- Finance Pal vX.Y.Z -->` comment and `APP_VERSION` in `index.html`. Worker version is `WORKER_VERSION` in `worker/src/index.js`.

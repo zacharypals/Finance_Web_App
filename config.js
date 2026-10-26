@@ -14,4 +14,5 @@ window.FP_KEYS = {
   oauthState: 'fp_oauth_state',
   authError: 'fp_auth_error',
   plaidRedirect: 'fp_plaid_oauth_redirect',
+  plaidLink: 'fp_plaid_link',   // {token, type, itemId, t} saved while Plaid Link is open (for bank OAuth round-trips)
 };

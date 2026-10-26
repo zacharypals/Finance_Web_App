@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.1.0 -->
+<!-- Finance Pal v0.2.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -16,6 +16,8 @@
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.26.5/babel.min.js"></script>
+<!-- Plaid requires Link to be loaded from its own CDN (no pinned versions are offered). -->
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
 <style>
 :root {
   --bg: #f4f6f5;
@@ -75,6 +77,34 @@ h2 { font-size: 16px; margin: 0 0 12px; }
 .pending { color: var(--ink-faint); font-weight: 700; }
 .phase-pill { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent-light); color: var(--accent); font-weight: 600; }
 
+/* Connections (Phase 1) */
+.row-between { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn-inline { width: auto; padding: 8px 14px; font-size: 14px; }
+.btn-secondary { background: var(--accent-light); color: var(--accent); border: 1px solid transparent; padding: 8px 14px; border-radius: var(--radius-md); font-weight: 600; font-size: 14px; }
+.btn-secondary:hover { border-color: var(--accent); }
+.btn-text { background: none; border: 0; color: var(--ink-light); padding: 8px 6px; font-size: 14px; }
+.btn-text:hover { color: var(--red); }
+button:disabled { opacity: .55; cursor: default; }
+.conn { border-top: 1px solid var(--border); padding: 16px 0 4px; margin-top: 16px; }
+.conn-name { font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.pill-ok { background: var(--accent-light); color: var(--accent); }
+.pill-warn { background: #fdf3dc; color: #8a6200; }
+.pill-err { background: var(--red-light); color: var(--red); }
+.pill-muted { background: var(--bg); color: var(--ink-light); }
+.acct-list { margin-top: 10px; }
+.acct-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.acct-row:last-child { border-bottom: 0; }
+.acct-name { font-weight: 500; }
+.acct-meta { font-size: 12.5px; }
+.acct-bal { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ok-box { background: var(--accent-light); color: var(--accent); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 14px; margin: 12px 0; }
+.warn-box { background: #fdf3dc; color: #8a6200; border-radius: var(--radius-sm); padding: 8px 12px; font-size: 13px; margin-top: 8px; }
+@media (prefers-color-scheme: dark) {
+  .pill-warn, .warn-box { background: #3a3018; color: #e8c46a; }
+}
+
 /* Bottom nav (mobile) */
 .bottomnav { display: none; }
 @media (max-width: 767px) {
@@ -113,7 +143,7 @@ h2 { font-size: 16px; margin: 0 0 12px; }
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -146,10 +176,84 @@ async function api(path, opts = {}) {
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 || res.status === 403) {
     clearSession();
+    window.dispatchEvent(new CustomEvent('fp-auth-lost', { detail: data.error || 'unauthenticated' }));
     throw new AuthError(data.error || 'unauthenticated');
   }
-  if (!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || ('Request failed (' + res.status + ')'));
+    err.code = data.code || data.error;
+    throw err;
+  }
   return data;
+}
+
+// ─────────────────────────────────────────────
+// FORMATTING
+// ─────────────────────────────────────────────
+const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+const fmtCents = (c) => (c === null || c === undefined ? '—' : usd.format(c / 100));
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function fmtAgo(ms) {
+  if (!ms) return 'never';
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + ' min ago';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return hrs + ' hr ago';
+  return Math.round(hrs / 24) + ' days ago';
+}
+
+// ─────────────────────────────────────────────
+// PLAID LINK
+// ─────────────────────────────────────────────
+// Opens Plaid Link. `ctx` = { type: 'bank'|'investment' } for a new connection, or { itemId } to reconnect.
+// Saved to localStorage so a bank OAuth round-trip (Chase, Wells) can resume via plaid-oauth.html.
+function launchPlaidLink(token, ctx, { receivedRedirectUri, onDone, onError }) {
+  if (!window.Plaid) { onError('Plaid Link didn’t load. Check your connection or ad blocker and reload.'); return; }
+  const handler = window.Plaid.create({
+    token,
+    receivedRedirectUri: receivedRedirectUri || undefined,
+    onSuccess: async (publicToken, metadata) => {
+      lsDel(K.plaidLink); lsDel(K.plaidRedirect);
+      try {
+        if (ctx.itemId) {
+          await api('/api/items/' + ctx.itemId + '/reconnected', { method: 'POST' });
+          onDone('Reconnected.');
+        } else {
+          const r = await api('/api/plaid/exchange', {
+            method: 'POST',
+            body: JSON.stringify({ public_token: publicToken, type: ctx.type, institution: metadata.institution }),
+          });
+          onDone(r.institution_name + ' linked' + (r.sync_error ? ' — first sync will retry (' + r.sync_error + ')' : '.'));
+        }
+      } catch (e) {
+        if (!(e instanceof AuthError)) onError(e.message);
+      }
+    },
+    onExit: (err) => {
+      lsDel(K.plaidLink); lsDel(K.plaidRedirect);
+      if (err) onError(err.display_message || err.error_message || err.error_code || 'Linking was interrupted.');
+      else onDone(null);
+    },
+  });
+  handler.open();
+}
+
+async function startPlaidLink(ctx, callbacks) {
+  try {
+    const r = await api('/api/plaid/link-token', {
+      method: 'POST',
+      body: JSON.stringify(ctx.itemId ? { item_id: ctx.itemId } : { type: ctx.type }),
+    });
+    lsSet(K.plaidLink, JSON.stringify({ token: r.link_token, ...ctx, t: Date.now() }));
+    launchPlaidLink(r.link_token, ctx, callbacks);
+  } catch (e) {
+    if (!(e instanceof AuthError)) callbacks.onError(e.message);
+  }
 }
 
 function startSignIn() {
@@ -200,8 +304,168 @@ function SetupStatus({ me }) {
         <li><span className="ok">✓</span><span>Signed in as <b>{me.email}</b> ({me.role})</span></li>
         <li><span className="ok">✓</span><span>Worker reachable — v{me.worker_version}</span></li>
         <li><span className="ok">✓</span><span>Database connected (your user record was created)</span></li>
-        <li><span className="pending">○</span><span>Plaid environment: <b>{me.plaid_env}</b> — bank linking arrives in Phase 1</span></li>
+        <li>
+          <span className={me.items_count ? 'ok' : 'pending'}>{me.items_count ? '✓' : '○'}</span>
+          <span>Plaid ({me.plaid_env}): {me.items_count
+            ? <b>{me.items_count} connection{me.items_count === 1 ? '' : 's'} linked</b>
+            : <>no banks linked yet — go to <b>Settings</b></>}</span>
+        </li>
       </ul>
+    </div>
+  );
+}
+
+const STATUS_LABEL = {
+  ok: { text: 'Connected', cls: 'pill-ok' },
+  login_required: { text: 'Reconnect needed', cls: 'pill-warn' },
+  error: { text: 'Error', cls: 'pill-err' },
+};
+const TX_STATUS_TEXT = {
+  NOT_READY: 'Transactions: Plaid is still downloading — check back in a few minutes',
+  INITIAL_UPDATE_COMPLETE: 'Transactions: last 30 days loaded; older history still downloading',
+  HISTORICAL_UPDATE_COMPLETE: null,
+  unsupported: 'Transactions not available for this connection',
+};
+const ITEM_NOTICE = {
+  PENDING_EXPIRATION: 'This bank’s access expires soon — click Reconnect to renew it.',
+  NEW_ACCOUNTS_AVAILABLE: 'New accounts are available at this bank — click Reconnect to add them.',
+};
+
+function AccountRow({ a }) {
+  const isCredit = a.type === 'credit';
+  return (
+    <div className="acct-row">
+      <div className="acct-main">
+        <div className="acct-name">{a.display_name || a.name}{a.mask && <span className="muted"> ••{a.mask}</span>}</div>
+        <div className="acct-meta muted">
+          {a.subtype || a.type}
+          {a.tx_count > 0 && <> · {a.tx_count} transactions</>}
+          {a.holdings_count > 0 && <> · {a.holdings_count} holdings</>}
+          {isCredit && a.statement_balance !== null && a.statement_balance !== undefined &&
+            <> · statement {fmtCents(a.statement_balance)} due {fmtDate(a.due_date)}</>}
+        </div>
+      </div>
+      <div className="acct-bal">
+        <div>{fmtCents(a.current)}</div>
+        <div className="acct-meta muted">{isCredit ? 'owed' : (a.available !== null && a.available !== a.current ? fmtCents(a.available) + ' avail' : '')}</div>
+      </div>
+    </div>
+  );
+}
+
+function Connections({ onChanged }) {
+  const [items, setItems] = useState(null);
+  const [busy, setBusy] = useState(null);          // item id, 'link', or null
+  const [notice, setNotice] = useState(null);       // { kind: 'ok'|'err', text }
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api('/api/items');
+      setItems(r.items);
+    } catch (e) {
+      if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Couldn’t load connections: ' + e.message });
+    }
+  }, []);
+
+  const callbacks = {
+    onDone: (msg) => { setBusy(null); if (msg) setNotice({ kind: 'ok', text: msg }); load(); onChanged && onChanged(); },
+    onError: (msg) => { setBusy(null); setNotice({ kind: 'err', text: msg }); load(); },
+  };
+
+  useEffect(() => {
+    load();
+    // Returning from a bank's OAuth page: resume the same Link session.
+    const params = new URLSearchParams(location.search);
+    if (params.get('plaid_oauth')) {
+      history.replaceState(null, '', location.pathname);
+      let saved = null;
+      try { saved = JSON.parse(lsGet(K.plaidLink) || 'null'); } catch (e) { console.warn('Bad saved Link state', e); }
+      const redirect = lsGet(K.plaidRedirect);
+      if (saved && redirect && Date.now() - saved.t < 30 * 60 * 1000) {
+        setBusy('link');
+        launchPlaidLink(saved.token, saved, { ...callbacks, receivedRedirectUri: redirect });
+      } else {
+        setNotice({ kind: 'err', text: 'The bank sent you back, but the linking session was lost (this can happen if you switched browsers or apps). Please start linking again from this device’s browser.' });
+      }
+    }
+  }, []);
+
+  async function syncNow(item, full) {
+    setBusy(item.id); setNotice(null);
+    try {
+      let more = true, rounds = 0, added = 0;
+      while (more && rounds < 15) {
+        const r = await api('/api/items/' + item.id + '/sync', { method: 'POST', body: JSON.stringify({ full: full && rounds === 0 }) });
+        more = r.more; added += r.added; rounds++;
+      }
+      setNotice({ kind: 'ok', text: item.institution_name + ' synced' + (added ? ' — ' + added + ' new transactions.' : '.') + (more ? ' More history is still loading; sync again shortly.' : '') });
+    } catch (e) {
+      if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: item.institution_name + ': ' + e.message });
+    } finally {
+      setBusy(null); load(); onChanged && onChanged();
+    }
+  }
+
+  async function remove(item) {
+    if (!window.confirm('Remove ' + item.institution_name + '? This deletes its accounts and transactions from Finance Pal and disconnects it from Plaid.')) return;
+    setBusy(item.id); setNotice(null);
+    try {
+      await api('/api/items/' + item.id, { method: 'DELETE' });
+      setNotice({ kind: 'ok', text: item.institution_name + ' removed.' });
+    } catch (e) {
+      if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message });
+    } finally {
+      setBusy(null); load(); onChanged && onChanged();
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="row-between">
+        <div>
+          <h1>Bank connections</h1>
+          <p className="muted" style={{ marginTop: 0 }}>Read-only access through Plaid. Each bank login uses one of your 10 free connections.</p>
+        </div>
+        <div className="btn-row">
+          <button className="btn-primary btn-inline" disabled={!!busy} onClick={() => { setBusy('link'); setNotice(null); startPlaidLink({ type: 'bank' }, callbacks); }}>+ Bank or card</button>
+          <button className="btn-secondary" disabled={!!busy} onClick={() => { setBusy('link'); setNotice(null); startPlaidLink({ type: 'investment' }, callbacks); }}>+ Investment account</button>
+        </div>
+      </div>
+
+      {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
+      {items === null && <div className="spinner" style={{ margin: '24px auto' }} />}
+      {items && items.length === 0 && <p className="muted">No banks linked yet. Use <b>+ Bank or card</b> for Chase, Wells Fargo and SoFi, and <b>+ Investment account</b> for Robinhood.</p>}
+
+      {items && items.map(item => {
+        const st = STATUS_LABEL[item.status] || STATUS_LABEL.error;
+        const needsReconnect = item.status === 'login_required' || ITEM_NOTICE[item.error_code];
+        const txText = TX_STATUS_TEXT[item.tx_status];
+        return (
+          <div className="conn" key={item.id}>
+            <div className="row-between">
+              <div>
+                <div className="conn-name">{item.institution_name} <span className={'pill ' + st.cls}>{st.text}</span>
+                  {item.link_type === 'investment' && <span className="pill pill-muted">investments</span>}</div>
+                <div className="muted acct-meta">Last synced {fmtAgo(item.last_synced_at)}{item.status === 'error' && item.error_code ? ' · ' + item.error_code : ''}</div>
+              </div>
+              <div className="btn-row">
+                {needsReconnect && <button className="btn-primary btn-inline" disabled={!!busy} onClick={() => { setBusy(item.id); setNotice(null); startPlaidLink({ itemId: item.id }, callbacks); }}>Reconnect</button>}
+                <button className="btn-secondary" disabled={!!busy} onClick={() => syncNow(item, true)}>{busy === item.id ? 'Working…' : 'Sync now'}</button>
+                <button className="btn-text" disabled={!!busy} onClick={() => remove(item)}>Remove</button>
+              </div>
+            </div>
+            {ITEM_NOTICE[item.error_code] && <div className="warn-box">{ITEM_NOTICE[item.error_code]}</div>}
+            {txText && <div className="muted acct-meta" style={{ marginTop: 6 }}>{txText}</div>}
+            <div className="acct-list">
+              {item.accounts.length === 0 && <div className="muted acct-meta">No accounts yet.</div>}
+              {item.accounts.map(a => <AccountRow key={a.id} a={a} />)}
+            </div>
+          </div>
+        );
+      })}
+      <p className="muted acct-meta" style={{ marginTop: 16, marginBottom: 0 }}>
+        Tip: link banks from a regular browser tab on your computer. Banks that send you to their own site to approve (Chase, Wells Fargo) can lose track of an installed home-screen app.
+      </p>
     </div>
   );
 }
@@ -248,7 +512,7 @@ function App() {
   const [authError, setAuthError] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [retrying, setRetrying] = useState(false);
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useState(() => (new URLSearchParams(location.search).get('plaid_oauth') ? 'settings' : 'dashboard'));
 
   // Restore session. authLoading must become false on EVERY exit path.
   const restore = useCallback(async () => {
@@ -267,6 +531,19 @@ function App() {
   }, []);
 
   useEffect(() => { restore(); }, [restore]);
+
+  // Any API call that comes back 401/403 drops you to the sign-in wall.
+  useEffect(() => {
+    const onLost = (e) => { setMe(null); setAuthError(e.detail === 'unauthenticated' ? null : e.detail); };
+    window.addEventListener('fp-auth-lost', onLost);
+    return () => window.removeEventListener('fp-auth-lost', onLost);
+  }, []);
+
+  // Refresh /api/me (e.g. connection count) after bank changes.
+  const refreshMe = useCallback(async () => {
+    try { setMe(await api('/api/me')); }
+    catch (e) { if (!(e instanceof AuthError)) console.warn('Refreshing /api/me failed', e); }
+  }, []);
 
   async function retry() {
     setRetrying(true);
@@ -308,7 +585,8 @@ function App() {
 
       <main>
         {me && tab === 'dashboard' && <SetupStatus me={me} />}
-        {me && tab !== 'dashboard' && <Placeholder tab={current} />}
+        {me && tab === 'settings' && <Connections onChanged={refreshMe} />}
+        {me && tab !== 'dashboard' && tab !== 'settings' && <Placeholder tab={current} />}
       </main>
 
       <nav className="bottomnav">

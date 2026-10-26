@@ -16,6 +16,7 @@ GOOGLE_CLIENT_ID = "760221993582-3nakfl51js22pij1am369v8cnhu4kr4e.apps.googleuse
 # Comma-separated. Removing an email here locks that person out on their next request.
 ALLOWED_EMAILS = "znpals@gmail.com"
 PLAID_ENV = "sandbox"
+PLAID_REDIRECT_URI = "https://zacharypals.github.io/Finance_Web_App/plaid-oauth.html"
 
 [[d1_databases]]
 binding = "DB"
@@ -27,6 +28,8 @@ migrations_dir = "migrations"
 binding = "KV"
 id = "51aceb79353e46908a9837460df8480f"
 
-# Phase 1 adds the daily sync:
-# [triggers]
-# crons = ["0 12 * * *"]   # 12:00 UTC = 5 AM Pacific (PDT)
+# Hourly: each run syncs the one connection that is most out of date (stays within free-plan CPU limits).
+# With 4 banks linked, everything is refreshed within the first few hours after midnight Pacific.
+# Uses 1 of the account's 5 free cron triggers.
+[triggers]
+crons = ["0 * * * *"]

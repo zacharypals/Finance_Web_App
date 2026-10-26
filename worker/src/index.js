@@ -1,14 +1,23 @@
 // Finance Pal — finance-api Worker
-// Phase 0: Google sign-in → Worker-issued session, email allowlist, /api/me.
 //
-// Auth model (differs from planner-auth on purpose):
+// Auth model:
 //   * Google is used only to prove WHO you are. We never store a Google refresh token.
 //   * After sign-in the Worker issues its own random session token. Only its SHA-256
 //     hash is stored in D1, so a database leak doesn't leak usable sessions.
 //   * Every /api/* request must carry `Authorization: Bearer <session token>`.
 //   * The allowlist is re-checked on every request, so removing an email locks it out.
+//
+// Plaid (Phase 1):
+//   * Access tokens are AES-GCM encrypted in D1 and never returned to the browser.
+//   * /plaid/webhook is verified (ES256 JWT + body hash) before anything happens.
+//   * An hourly cron syncs one stale connection per run (free-plan CPU budget).
 
-const WORKER_VERSION = '0.1.0';
+import { json, sha256Hex } from './util.js';
+import { encryptToken, decryptToken } from './crypto.js';
+import { plaid, PlaidError, verifyPlaidWebhook } from './plaid.js';
+import { syncItem, runScheduledSync } from './sync.js';
+
+const WORKER_VERSION = '0.2.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -26,24 +35,39 @@ export default {
         res = await authExchange(req, env);
       } else if (url.pathname === '/auth/logout' && req.method === 'POST') {
         res = await authLogout(req, env);
+      } else if (url.pathname === '/plaid/webhook' && req.method === 'POST') {
+        res = await plaidWebhook(req, env, ctx);
       } else if (url.pathname.startsWith('/api/')) {
         const auth = await authenticate(req, env);
-        res = auth.error ? auth.error : await routeApi(req, env, url, auth.user);
+        res = auth.error ? auth.error : await routeApi(req, env, ctx, url, auth.user);
       } else {
         res = json({ error: 'not_found' }, 404);
       }
     } catch (err) {
-      console.error('Unhandled error', err && err.stack ? err.stack : err);
-      res = json({ error: 'server_error' }, 500);
+      if (err instanceof PlaidError) {
+        console.warn('Plaid error', err.code, err.plaidMessage);
+        res = json({ error: 'plaid_error', code: err.code, message: err.displayMessage || err.plaidMessage || err.code }, 502);
+      } else {
+        console.error('Unhandled error', err && err.stack ? err.stack : err);
+        res = json({ error: 'server_error', message: String(err && err.message || err) }, 500);
+      }
     }
     return withHeaders(res, cors);
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runScheduledSync(env));
   },
 };
 
 // ── API routes ─────────────────────────────────────────
 
-async function routeApi(req, env, url, user) {
-  if (url.pathname === '/api/me' && req.method === 'GET') {
+async function routeApi(req, env, ctx, url, user) {
+  const path = url.pathname;
+  const method = req.method;
+
+  if (path === '/api/me' && method === 'GET') {
+    const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM plaid_items WHERE owner_user_id = ?').bind(user.id).first();
     return json({
       email: user.email,
       name: user.name,
@@ -51,9 +75,216 @@ async function routeApi(req, env, url, user) {
       role: user.role,
       worker_version: WORKER_VERSION,
       plaid_env: env.PLAID_ENV || 'sandbox',
+      items_count: n ? n.n : 0,
     });
   }
+
+  if (path === '/api/plaid/link-token' && method === 'POST') return linkToken(req, env, url, user);
+  if (path === '/api/plaid/exchange' && method === 'POST') return exchangePublicToken(req, env, user);
+  if (path === '/api/items' && method === 'GET') return listItems(env, user);
+
+  const m = path.match(/^\/api\/items\/([^/]+)(\/(sync|reconnected))?$/);
+  if (m) {
+    const item = await ownedItem(env, user, m[1]);
+    if (!item) return json({ error: 'not_found' }, 404);
+    if (!m[3] && method === 'DELETE') return removeItem(env, item);
+    if (m[3] === 'sync' && method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      const summary = await syncItem(env, item, { maxPages: 3, forceSnapshot: !!body.full });
+      return json(summary);
+    }
+    if (m[3] === 'reconnected' && method === 'POST') {
+      await env.DB.prepare("UPDATE plaid_items SET status = 'ok', error_code = NULL WHERE id = ?").bind(item.id).run();
+      const fresh = await ownedItem(env, user, item.id);
+      const summary = await syncItem(env, fresh, { maxPages: 1, forceSnapshot: true });
+      return json(summary);
+    }
+  }
+
   return json({ error: 'not_found' }, 404);
+}
+
+// ── Plaid: Link ────────────────────────────────────────
+
+async function linkToken(req, env, url, user) {
+  const body = await req.json().catch(() => ({}));
+  const req0 = {
+    client_name: 'Finance Pal',
+    user: { client_user_id: user.id },
+    country_codes: ['US'],
+    language: 'en',
+    redirect_uri: env.PLAID_REDIRECT_URI,
+    webhook: `${url.origin}/plaid/webhook`,
+  };
+
+  if (body.item_id) {
+    // Update mode: reconnect an existing bank. No products; account selection lets new accounts be added.
+    const item = await ownedItem(env, user, body.item_id);
+    if (!item) return json({ error: 'not_found' }, 404);
+    const token = await decryptToken(env, item.access_token_enc, item.access_token_iv);
+    const r = await plaid(env, '/link/token/create', {
+      ...req0, access_token: token, update: { account_selection_enabled: true },
+    });
+    return json({ link_token: r.link_token, expiration: r.expiration });
+  }
+
+  let request;
+  if (body.type === 'investment') {
+    request = { ...req0, products: ['investments'] };
+  } else {
+    request = {
+      ...req0,
+      products: ['transactions'],
+      required_if_supported_products: ['liabilities'],
+      transactions: { days_requested: 730 },
+    };
+  }
+  let r;
+  try {
+    r = await plaid(env, '/link/token/create', request);
+  } catch (err) {
+    // If this Plaid plan rejects required_if_supported_products, fall back to asking for consent only.
+    if (err instanceof PlaidError && err.code === 'INVALID_FIELD' && request.required_if_supported_products) {
+      delete request.required_if_supported_products;
+      request.additional_consented_products = ['liabilities'];
+      r = await plaid(env, '/link/token/create', request);
+    } else {
+      throw err;
+    }
+  }
+  return json({ link_token: r.link_token, expiration: r.expiration });
+}
+
+async function exchangePublicToken(req, env, user) {
+  const body = await req.json().catch(() => ({}));
+  if (!body.public_token) return json({ error: 'bad_request' }, 400);
+  const type = body.type === 'investment' ? 'investment' : 'bank';
+  const inst = body.institution || {};
+
+  const ex = await plaid(env, '/item/public_token/exchange', { public_token: body.public_token });
+
+  // Each connection counts toward the Trial plan's 10-Item cap. If this bank is already
+  // linked, remove the new duplicate right away and tell the user to use Reconnect instead.
+  if (inst.institution_id) {
+    const dup = await env.DB.prepare(
+      'SELECT id FROM plaid_items WHERE owner_user_id = ? AND institution_id = ? AND link_type = ?'
+    ).bind(user.id, inst.institution_id, type).first();
+    if (dup) {
+      try {
+        await plaid(env, '/item/remove', { access_token: ex.access_token });
+      } catch (e) {
+        console.warn('Failed to remove duplicate item', e.code || e);
+      }
+      return json({ error: 'duplicate_institution', message: `${inst.name || 'That bank'} is already linked. Use Reconnect on the existing connection instead.` }, 409);
+    }
+  }
+
+  const enc = await encryptToken(env, ex.access_token);
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO plaid_items (id, owner_user_id, plaid_item_id, institution_id, institution_name,
+       access_token_enc, access_token_iv, status, link_type, tx_status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?)`
+  ).bind(id, user.id, ex.item_id, inst.institution_id || null, inst.name || 'Bank', enc.ct, enc.iv, type,
+    type === 'investment' ? 'unsupported' : null, Date.now()).run();
+
+  const item = await env.DB.prepare('SELECT * FROM plaid_items WHERE id = ?').bind(id).first();
+  let summary = null, syncError = null;
+  try {
+    summary = await syncItem(env, item, { maxPages: 1, forceSnapshot: true });
+  } catch (e) {
+    syncError = e.code || e.message; // the item is saved; the next sync will retry
+  }
+  return json({ id, institution_name: item.institution_name, summary, sync_error: syncError });
+}
+
+async function listItems(env, user) {
+  const items = (await env.DB.prepare(
+    `SELECT id, institution_name, status, error_code, link_type, tx_status, last_synced_at,
+            last_snapshot_date, consent_expires_at, created_at
+       FROM plaid_items WHERE owner_user_id = ? ORDER BY created_at`
+  ).bind(user.id).all()).results;
+
+  const accounts = (await env.DB.prepare(
+    `SELECT a.id, a.item_id, a.name, a.display_name, a.mask, a.type, a.subtype, a.visibility, a.hidden,
+            b.date AS balance_date, b.current, b.available, b.credit_limit,
+            cs.statement_balance, cs.due_date, cs.minimum_payment,
+            (SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.id AND t.removed = 0) AS tx_count,
+            (SELECT COUNT(*) FROM holdings_snapshots h WHERE h.account_id = a.id
+               AND h.date = (SELECT MAX(date) FROM holdings_snapshots WHERE account_id = a.id)) AS holdings_count
+       FROM accounts a
+       JOIN plaid_items i ON i.id = a.item_id
+       LEFT JOIN balance_snapshots b ON b.account_id = a.id
+            AND b.date = (SELECT MAX(date) FROM balance_snapshots WHERE account_id = a.id)
+       LEFT JOIN card_statements cs ON cs.account_id = a.id
+            AND cs.statement_date = (SELECT MAX(statement_date) FROM card_statements WHERE account_id = a.id)
+      WHERE i.owner_user_id = ?
+      ORDER BY a.type, a.name`
+  ).bind(user.id).all()).results;
+
+  return json({ items: items.map((it) => ({ ...it, accounts: accounts.filter((a) => a.item_id === it.id) })) });
+}
+
+async function removeItem(env, item) {
+  try {
+    const token = await decryptToken(env, item.access_token_enc, item.access_token_iv);
+    await plaid(env, '/item/remove', { access_token: token });
+  } catch (e) {
+    // Still delete locally if Plaid already forgot the item.
+    if (!(e instanceof PlaidError && e.code === 'ITEM_NOT_FOUND')) throw e;
+  }
+  await env.DB.prepare('DELETE FROM plaid_items WHERE id = ?').bind(item.id).run();
+  return json({ ok: true });
+}
+
+async function ownedItem(env, user, id) {
+  return env.DB.prepare('SELECT * FROM plaid_items WHERE id = ? AND owner_user_id = ?').bind(id, user.id).first();
+}
+
+// ── Plaid: webhooks ────────────────────────────────────
+
+async function plaidWebhook(req, env, ctx) {
+  const raw = await req.text();
+  if (!(await verifyPlaidWebhook(env, req, raw))) return json({ error: 'invalid_signature' }, 401);
+
+  const hook = JSON.parse(raw);
+  const item = hook.item_id
+    ? await env.DB.prepare('SELECT * FROM plaid_items WHERE plaid_item_id = ?').bind(hook.item_id).first()
+    : null;
+  if (!item) return json({ ok: true, ignored: 'unknown_item' });
+
+  const setStatus = (status, code) =>
+    env.DB.prepare('UPDATE plaid_items SET status = ?, error_code = ? WHERE id = ?').bind(status, code, item.id).run();
+
+  const key = `${hook.webhook_type}:${hook.webhook_code}`;
+  switch (key) {
+    case 'TRANSACTIONS:SYNC_UPDATES_AVAILABLE':
+      ctx.waitUntil(syncItem(env, item, { maxPages: 3, transactionsOnly: true }).catch(() => {}));
+      break;
+    case 'ITEM:ERROR': {
+      const code = hook.error && hook.error.error_code;
+      await setStatus(code === 'ITEM_LOGIN_REQUIRED' ? 'login_required' : 'error', code || 'ITEM_ERROR');
+      break;
+    }
+    case 'ITEM:PENDING_EXPIRATION':
+    case 'ITEM:PENDING_DISCONNECT':
+      await setStatus('ok', 'PENDING_EXPIRATION');
+      break;
+    case 'ITEM:USER_PERMISSION_REVOKED':
+    case 'ITEM:USER_ACCOUNT_REVOKED':
+      await setStatus('error', hook.webhook_code);
+      break;
+    case 'ITEM:LOGIN_REPAIRED':
+      await setStatus('ok', null);
+      break;
+    case 'ITEM:NEW_ACCOUNTS_AVAILABLE':
+      await setStatus(item.status, 'NEW_ACCOUNTS_AVAILABLE');
+      break;
+    default:
+      // HOLDINGS / LIABILITIES default updates are picked up by the daily snapshot.
+      break;
+  }
+  return json({ ok: true });
 }
 
 // ── Auth ───────────────────────────────────────────────
@@ -185,11 +416,6 @@ function randomToken() {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function sha256Hex(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 function corsHeaders(req, env) {
   const origin = req.headers.get('Origin');
   const h = { Vary: 'Origin' };
@@ -207,8 +433,4 @@ function withHeaders(res, extra) {
   for (const [k, v] of Object.entries(extra)) r.headers.set(k, v);
   r.headers.set('Cache-Control', 'no-store');
   return r;
-}
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
