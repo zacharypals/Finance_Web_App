@@ -77,6 +77,10 @@ From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (ap
 No database migration this time. From the `worker` folder: `wrangler deploy`. From the repo root: commit and push.
 The first time you open Transactions, Reports or Settings, the starter categories are created and all history is categorized once.
 
+## Phase 4 deploy (Plan)
+
+From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (applies 0004), then `wrangler deploy`. From the repo root: commit and push.
+
 ## Conventions
 
 - Version lives in two places and must match: the `<!-- Finance Pal vX.Y.Z -->` comment and `APP_VERSION` in `index.html`. Worker version is `WORKER_VERSION` in `worker/src/index.js`.

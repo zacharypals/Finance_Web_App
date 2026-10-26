@@ -23,7 +23,9 @@ import {
   listRules, createRule, deleteRule, rerunCategorization, reportSummary,
 } from './transactions.js';
 
-const WORKER_VERSION = '0.4.0';
+import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell } from './plan.js';
+
+const WORKER_VERSION = '0.5.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -109,6 +111,16 @@ async function routeApi(req, env, ctx, url, user) {
   if (rm && method === 'DELETE') return deleteRule(env, user, rm[1]);
   if (path === '/api/categorize/rerun' && method === 'POST') return rerunCategorization(env, user);
   if (path === '/api/reports/summary' && method === 'GET') return reportSummary(env, user, url.searchParams);
+
+  // Phase 4: plan
+  if (path === '/api/plan' && method === 'GET') return getPlan(env, user, Number(url.searchParams.get('weeks')));
+  if (path === '/api/plan/template' && method === 'PUT') return putTemplate(env, user, await body());
+  if (path === '/api/plan/cell' && method === 'PUT') return putCell(env, user, await body());
+  if (path === '/api/buckets' && method === 'POST') return createBucket(env, user, await body());
+  if (path === '/api/buckets/seed' && method === 'POST') return seedBuckets(env, user);
+  if (path === '/api/buckets/order' && method === 'POST') { const b = await body(); return reorderBuckets(env, user, Array.isArray(b.ids) ? b.ids.map(String) : []); }
+  const bm = path.match(/^\/api\/buckets\/([^/]+)$/);
+  if (bm && method === 'PATCH') return patchBucket(env, user, bm[1], await body());
 
   // Phase 2: accounts & net worth
   if (path === '/api/accounts' && method === 'GET') return listAccounts(env, user);
@@ -277,7 +289,14 @@ async function removeItem(env, item) {
     // Still delete locally if Plaid already forgot the item.
     if (!(e instanceof PlaidError && e.code === 'ITEM_NOT_FOUND')) throw e;
   }
-  await env.DB.prepare('DELETE FROM plaid_items WHERE id = ?').bind(item.id).run();
+  // Unlink anything that points at this bank's accounts, then delete (accounts/transactions cascade).
+  const ofItem = 'SELECT id FROM accounts WHERE item_id = ?';
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE buckets SET linked_account_id = NULL, backing = 'none' WHERE linked_account_id IN (${ofItem})`).bind(item.id),
+    env.DB.prepare(`UPDATE buckets SET card_account_id = NULL WHERE card_account_id IN (${ofItem})`).bind(item.id),
+    env.DB.prepare(`DELETE FROM category_rules WHERE account_id IN (${ofItem})`).bind(item.id),
+    env.DB.prepare('DELETE FROM plaid_items WHERE id = ?').bind(item.id),
+  ]);
   return json({ ok: true });
 }
 

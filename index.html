@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.4.0 -->
+<!-- Finance Pal v0.5.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -210,6 +210,42 @@ input[type=text], input[type=date], input[type=number], select {
   .filters select, .filters input[type=text] { flex: 1 1 45%; max-width: none; }
 }
 
+/* Plan (Phase 4) */
+.moves { display: grid; gap: 2px; margin-top: 10px; }
+.move { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); font-size: 14px; cursor: pointer; }
+.move input { width: 18px; height: 18px; }
+.move-amt { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 80px; }
+.move-done > span:not(.muted) { color: var(--ink-light); text-decoration: line-through; }
+.fund-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.fund-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; display: grid; gap: 6px; align-content: start; }
+.fund-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.fund-bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; margin: 4px 0; }
+.fund-bar span { display: block; height: 100%; background: var(--chart-line); border-radius: 0 4px 4px 0; }
+.fund-bar span.short { background: var(--gold); }
+.fund-nums { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; font-size: 14px; }
+.fund-nums .muted { font-size: 12px; margin-right: 4px; }
+.plan { border-collapse: separate; border-spacing: 0; font-size: 13.5px; font-variant-numeric: tabular-nums; min-width: 100%; }
+.plan th, .plan td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--paper); }
+.plan thead th { font-size: 12px; color: var(--ink-light); font-weight: 600; padding: 8px 6px; }
+.plan .sticky { position: sticky; left: 0; z-index: 1; text-align: left; min-width: 150px; max-width: 190px; white-space: normal; }
+.plan th.cur, .plan td.cur { background: var(--accent-light); }
+.plan th.past { color: var(--ink-faint); }
+.plan .now { color: var(--ink-light); }
+.plan-group td { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--ink-light); padding-top: 12px; }
+.plan .cell { width: 72px; text-align: right; border: 1px solid transparent; background: transparent; padding: 5px 6px; color: var(--ink-light); font-size: 13.5px; }
+.plan .cell:hover { border-color: var(--border); }
+.plan .cell:focus { border-color: var(--accent); background: var(--paper); color: var(--ink); outline: none; }
+.plan .cell.override { color: var(--ink); font-weight: 600; }
+.plan td.done .cell { text-decoration: line-through; text-decoration-color: var(--ink-faint); }
+.plan tfoot td { font-weight: 600; }
+.plan tfoot tr.left td { border-bottom: 0; }
+.plan td.neg { color: var(--red); }
+.linkish { background: none; border: 0; padding: 0; color: var(--ink); font-weight: 500; text-align: left; }
+.linkish:hover { color: var(--accent); text-decoration: underline; }
+.plan .asof { display: block; font-size: 11px; color: var(--ink-faint); font-weight: 400; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.form-grid input, .form-grid select { width: 100%; max-width: none; }
+
 /* Bottom nav (mobile) */
 .bottomnav { display: none; }
 @media (max-width: 767px) {
@@ -248,7 +284,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1390,6 +1426,312 @@ function CategoriesAndRules() {
   );
 }
 
+// ─────────────────────────────────────────────
+// PLAN (Phase 4)
+// ─────────────────────────────────────────────
+const BUCKET_KINDS = [
+  { key: 'bill', label: 'Bill', group: 'Bills' },
+  { key: 'card', label: 'Credit card', group: 'Credit cards' },
+  { key: 'goal', label: 'Savings / envelope', group: 'Savings & envelopes' },
+  { key: 'passthrough', label: 'Retirement (pass-through)', group: 'Retirement' },
+  { key: 'spending', label: 'Spending money (direct deposit)', group: 'Spending money' },
+];
+const toCents = (s) => { const n = parseFloat(String(s).replace(/[$,\s]/g, '')); return Number.isFinite(n) ? Math.round(n * 100) : null; };
+const dollarsInput = (c) => (c === null || c === undefined ? '' : (c / 100).toFixed(c % 100 ? 2 : 0));
+const shortDate = (iso) => parseIso(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+function FundingCard({ f, onEdit }) {
+  if (f.missing) return (
+    <div className="fund-card">
+      <div className="fund-head"><b>{f.name}</b><span className="pill pill-muted">needs setup</span></div>
+      <div className="muted acct-meta" style={{ margin: '6px 0 10px' }}>{f.missing}</div>
+      <button className="btn-secondary" onClick={() => onEdit(f.bucket_id)}>Set up</button>
+    </div>
+  );
+  const pct = f.need > 0 ? Math.min(100, f.available / f.need * 100) : 100;
+  return (
+    <div className="fund-card">
+      <div className="fund-head"><b>{f.name}</b>
+        {f.short > 0 ? <span className="pill pill-warn">Short {fmtCents(f.short)}</span> : <span className="pill pill-ok">✓ Funded</span>}
+      </div>
+      <div className="acct-meta muted">Due {shortDate(f.due)} · {f.basis === 'statement' ? 'statement balance' : f.basis === 'current balance' ? 'current balance (next statement)' : 'monthly bill'}</div>
+      <div className="fund-bar"><span style={{ width: pct + '%' }} className={f.short > 0 ? 'short' : ''} /></div>
+      <div className="fund-nums">
+        <span><span className="muted">Needed</span> {fmtCents(f.need)}</span>
+        <span><span className="muted">By due date</span> {fmtCents(f.available)}</span>
+      </div>
+      <div className="acct-meta muted">
+        {f.no_vault ? 'Not linked to a vault — only upcoming allocations are counted. ' : 'In vault now ' + fmtCents(f.balance) + (f.planned ? ' + ' + fmtCents(f.planned) + ' still to move' : '') + '. '}
+        About {fmtCents(f.suggested)}/paycheck covers it.
+      </div>
+    </div>
+  );
+}
+
+function BucketEditor({ b, accounts, cats, onSaved, onError, onCancel }) {
+  const [f, setF] = useState({
+    name: b ? b.name : '', kind: b ? b.kind : 'goal',
+    weekly: b ? dollarsInput(b.weekly_amount) : '', linked_account_id: b ? b.linked_account_id || '' : '',
+    card_account_id: b ? b.card_account_id || '' : '', target: b ? dollarsInput(b.target_amount) : '',
+    due_day: b && b.due_day ? String(b.due_day) : '', goal: b ? dollarsInput(b.goal_amount) : '', category_id: b ? b.category_id || '' : '',
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }));
+  const deposit = accounts.filter(a => a.type === 'depository' && a.is_mine);
+  const credit = accounts.filter(a => a.type === 'credit' && a.is_mine);
+  async function save(extra) {
+    setSaving(true);
+    const body = {
+      name: f.name, kind: f.kind, weekly_amount: f.weekly === '' ? null : toCents(f.weekly),
+      linked_account_id: f.linked_account_id || null, card_account_id: f.kind === 'card' ? (f.card_account_id || null) : null,
+      target_amount: f.kind === 'bill' && f.target !== '' ? toCents(f.target) : null,
+      due_day: f.kind === 'bill' && f.due_day !== '' ? Number(f.due_day) : null,
+      goal_amount: f.kind === 'goal' && f.goal !== '' ? toCents(f.goal) : null,
+      category_id: f.category_id || null, ...extra,
+    };
+    try {
+      await api(b ? '/api/buckets/' + b.id : '/api/buckets', { method: b ? 'PATCH' : 'POST', body: JSON.stringify(body) });
+      onSaved(extra && extra.archived ? f.name + ' archived.' : 'Saved ' + f.name + '.');
+    } catch (e) { if (!(e instanceof AuthError)) onError(e.message); }
+    finally { setSaving(false); }
+  }
+  return (
+    <div className="editor">
+      <div className="form-grid">
+        <label>Name<input type="text" value={f.name} maxLength={40} onChange={e => set('name', e.target.value)} /></label>
+        <label>Type<select value={f.kind} onChange={e => set('kind', e.target.value)}>{BUCKET_KINDS.map(k => <option key={k.key} value={k.key}>{k.label}</option>)}</select></label>
+        <label>Each paycheck ($)<input type="text" inputMode="decimal" value={f.weekly} placeholder="0" onChange={e => set('weekly', e.target.value)} /></label>
+        {f.kind !== 'passthrough' && (
+          <label>{f.kind === 'spending' ? 'Lands in' : 'Vault'}
+            <select value={f.linked_account_id} onChange={e => set('linked_account_id', e.target.value)}>
+              <option value="">Not linked</option>
+              {deposit.map(a => <option key={a.id} value={a.id}>{acctName(a)}{a.mask ? ' ••' + a.mask : ''} ({a.institution_name})</option>)}
+            </select>
+          </label>
+        )}
+        {f.kind === 'card' && (
+          <label>Pays this card
+            <select value={f.card_account_id} onChange={e => set('card_account_id', e.target.value)}>
+              <option value="">Choose…</option>
+              {credit.map(a => <option key={a.id} value={a.id}>{acctName(a)}{a.mask ? ' ••' + a.mask : ''}</option>)}
+            </select>
+          </label>
+        )}
+        {f.kind === 'bill' && <>
+          <label>Bill amount ($)<input type="text" inputMode="decimal" value={f.target} onChange={e => set('target', e.target.value)} /></label>
+          <label>Due day of month<input type="number" min="1" max="31" value={f.due_day} onChange={e => set('due_day', e.target.value)} /></label>
+        </>}
+        {f.kind === 'goal' && <label>Goal ($, optional)<input type="text" inputMode="decimal" value={f.goal} onChange={e => set('goal', e.target.value)} /></label>}
+        {(f.kind === 'goal' || f.kind === 'spending') && (
+          <label>Track spending in
+            <CategorySelect cats={cats} value={f.category_id} onChange={v => set('category_id', v || '')} includeUncat={false} />
+          </label>
+        )}
+      </div>
+      <div className="btn-row">
+        <button className="btn-primary btn-inline" disabled={saving || !f.name.trim()} onClick={() => save()}>{saving ? 'Saving…' : 'Save'}</button>
+        <button className="btn-text" onClick={onCancel}>Cancel</button>
+        {b && <button className="btn-text" style={{ marginLeft: 'auto' }} disabled={saving} onClick={() => save({ archived: true })}>Archive bucket</button>}
+      </div>
+    </div>
+  );
+}
+
+function PlanView() {
+  const [cats] = useCategories();
+  const [plan, setPlan] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [notice, setNotice] = useState(null);
+  const [editing, setEditing] = useState(null);        // bucket id or 'new'
+  const [draft, setDraft] = useState({});              // 'bucket|date' -> text being typed
+  const [showTemplate, setShowTemplate] = useState(false);
+  const [tpl, setTpl] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const setupRef = React.useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [p, a] = await Promise.all([api('/api/plan?weeks=8'), api('/api/accounts')]);
+      setPlan(p); setAccounts(a.accounts);
+      if (p.template) setTpl({ cadence: p.template.cadence, anchor_date: p.template.anchor_date, expected: dollarsInput(p.template.expected_total) });
+    } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Couldn’t load your plan: ' + e.message }); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const ok = (text) => { setNotice({ kind: 'ok', text }); setEditing(null); load(); };
+  const fail = (text) => setNotice({ kind: 'err', text });
+
+  async function seed() {
+    setBusy(true);
+    try { const r = await api('/api/buckets/seed', { method: 'POST' }); ok('Created ' + r.created + ' buckets from your spreadsheet and linked ' + r.linked + ' to accounts. Check the ones marked “needs setup”.'); }
+    catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+    finally { setBusy(false); }
+  }
+  async function saveCell(b, d, text) {
+    const key = b.id + '|' + d;
+    setDraft(x => { const n = { ...x }; delete n[key]; return n; });
+    if (text === undefined) return;
+    const cents = text.trim() === '' ? null : toCents(text);
+    if (cents === null && text.trim() !== '') { fail('“' + text + '” isn’t an amount.'); return; }
+    const amount = cents === null || cents === (b.weekly_amount || 0) ? null : cents;
+    try { await api('/api/plan/cell', { method: 'PUT', body: JSON.stringify({ pay_date: d, bucket_id: b.id, amount }) }); load(); }
+    catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+  }
+  async function toggleMove(m, done) {
+    try { await api('/api/plan/cell', { method: 'PUT', body: JSON.stringify({ pay_date: plan.moves.pay_date, bucket_id: m.bucket_id, done }) }); load(); }
+    catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+  }
+  async function saveTemplate() {
+    setBusy(true);
+    try {
+      await api('/api/plan/template', { method: 'PUT', body: JSON.stringify({ cadence: tpl.cadence, anchor_date: tpl.anchor_date, expected_total: tpl.expected === '' ? null : toCents(tpl.expected) }) });
+      setShowTemplate(false); ok('Paycheck settings saved.');
+    } catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+    finally { setBusy(false); }
+  }
+  const editBucket = (id) => { setEditing(id); setTimeout(() => setupRef.current && setupRef.current.scrollIntoView({ behavior: 'smooth' }), 50); };
+
+  if (!plan) return <div className="card">{notice ? <div className="error-box">{notice.text}</div> : <div className="spinner" style={{ margin: '24px auto' }} />}</div>;
+
+  if (!plan.buckets.length) return (
+    <div className="card">
+      <h1>Plan</h1>
+      <p className="muted">Buckets are where each paycheck goes — mostly your SoFi vaults, plus bills, cards and retirement.</p>
+      {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
+      <div className="btn-row" style={{ marginTop: 12 }}>
+        <button className="btn-primary btn-inline" disabled={busy} onClick={seed}>{busy ? 'Creating…' : 'Start from my spreadsheet'}</button>
+        <button className="btn-secondary" onClick={() => setEditing('new')}>Add a bucket</button>
+      </div>
+      <p className="muted acct-meta">“Start from my spreadsheet” creates Mortgage, HOA, InCharge, Chase, Wells, IRA, Roth, CL IRA, Splurge, Comedy, Allowance, Savings, Clothes, Car, Travel, Emergency Fund and Spending money with your current weekly amounts, and links each to the SoFi vault with the same name.</p>
+      {editing === 'new' && <BucketEditor b={null} accounts={accounts} cats={cats} onSaved={ok} onError={fail} onCancel={() => setEditing(null)} />}
+    </div>
+  );
+
+  const days = plan.paydays;
+  const groups = BUCKET_KINDS.map(k => ({ ...k, list: plan.buckets.filter(b => b.kind === k.key) })).filter(g => g.list.length);
+  const moves = plan.moves;
+  const pending = moves ? moves.items.filter(m => !m.done && !m.auto) : [];
+
+  return (
+    <>
+      {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
+
+      {moves && moves.items.length > 0 && (
+        <div className="card">
+          <div className="row-between">
+            <h2 style={{ margin: 0 }}>Moves for the {shortDate(moves.pay_date)} paycheck</h2>
+            <span className={'pill ' + (pending.length ? 'pill-warn' : 'pill-ok')}>{pending.length ? pending.length + ' to do' : '✓ All done'}</span>
+          </div>
+          <div className="moves">
+            {moves.items.map(m => (
+              <label key={m.bucket_id} className={'move' + (m.done || m.auto ? ' move-done' : '')}>
+                <input type="checkbox" checked={m.done || m.auto} disabled={m.auto} onChange={e => toggleMove(m, e.target.checked)} />
+                <span className="move-amt">{fmtCents(m.amount)}</span>
+                <span>→ {m.name}{m.to && m.to.toLowerCase() !== m.name.toLowerCase() ? <span className="muted"> ({m.to})</span> : null}</span>
+                {m.auto && <span className="muted acct-meta">seen in your account</span>}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <h2>Bills & cards</h2>
+        {plan.funding.length === 0 ? <div className="muted acct-meta">No bills or card buckets yet.</div> :
+          <div className="fund-grid">{plan.funding.map(f => <FundingCard key={f.bucket_id} f={f} onEdit={editBucket} />)}</div>}
+      </div>
+
+      <div className="card">
+        <div className="row-between">
+          <h2 style={{ margin: 0 }}>Paychecks</h2>
+          <button className="btn-text" onClick={() => setShowTemplate(v => !v)}>Paycheck settings</button>
+        </div>
+        {showTemplate && tpl && (
+          <div className="editor" style={{ marginTop: 10 }}>
+            <div className="form-grid">
+              <label>How often<select value={tpl.cadence} onChange={e => setTpl(t => ({ ...t, cadence: e.target.value }))}><option value="weekly">Weekly</option><option value="biweekly">Every 2 weeks</option></select></label>
+              <label>A recent payday<input type="date" value={tpl.anchor_date} onChange={e => setTpl(t => ({ ...t, anchor_date: e.target.value }))} /></label>
+              <label>Usual total ($, all deposits)<input type="text" inputMode="decimal" value={tpl.expected} onChange={e => setTpl(t => ({ ...t, expected: e.target.value }))} /></label>
+            </div>
+            <div className="btn-row"><button className="btn-primary btn-inline" disabled={busy} onClick={saveTemplate}>Save</button></div>
+          </div>
+        )}
+        <p className="muted acct-meta">Grey amounts are each bucket’s usual amount — type over one to change just that paycheck; clear it to go back.</p>
+        <div className="table-scroll">
+          <table className="plan">
+            <thead><tr>
+              <th className="sticky">Bucket</th><th>Now</th>
+              {days.map(d => <th key={d.date} className={(d.is_current ? 'cur ' : '') + (d.date < (plan.moves || {}).pay_date ? 'past' : '')}>{shortDate(d.date)}</th>)}
+            </tr></thead>
+            {groups.map(g => (
+              <tbody key={g.key}>
+                <tr className="plan-group"><td className="sticky" colSpan={2}>{g.group}</td><td colSpan={days.length} /></tr>
+                {g.list.map(b => (
+                  <tr key={b.id}>
+                    <td className="sticky"><button className="linkish" onClick={() => editBucket(b.id)}>{b.name}</button>
+                      {b.spent_this_month !== null && b.spent_this_month !== undefined && <span className="asof">spent {fmtCents(b.spent_this_month)} this month</span>}
+                    </td>
+                    <td className="now">{b.linked_account_id ? fmtCents(b.linked_balance) : <span className="muted">—</span>}</td>
+                    {days.map(d => {
+                      const c = plan.cells[b.id][d.date];
+                      const key = b.id + '|' + d.date;
+                      const val = key in draft ? draft[key] : (c.amount ? dollarsInput(c.amount) : '');
+                      return (
+                        <td key={d.date} className={(d.is_current ? 'cur ' : '') + (c.done || c.auto ? 'done' : '')}>
+                          <input className={'cell' + (c.override ? ' override' : '')} inputMode="decimal" value={val} placeholder="0"
+                            aria-label={b.name + ' on ' + shortDate(d.date)}
+                            onChange={e => setDraft(x => ({ ...x, [key]: e.target.value }))}
+                            onBlur={() => key in draft && saveCell(b, d.date, draft[key])}
+                            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setDraft(x => { const n = { ...x }; delete n[key]; return n; }); }} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            ))}
+            <tfoot>
+              <tr><td className="sticky">Paycheck</td><td />{days.map(d => <td key={d.date} className={d.is_current ? 'cur' : ''}>
+                {d.actual ? <span title="Seen in your accounts">{fmtCents(d.actual)} ✓</span> : <span className="muted">{d.expected ? fmtCents(d.expected) : '—'}</span>}</td>)}</tr>
+              <tr><td className="sticky">Allocated</td><td />{days.map(d => <td key={d.date} className={d.is_current ? 'cur' : ''}>{fmtCents(d.allocated)}</td>)}</tr>
+              <tr className="left"><td className="sticky">Left over</td><td />{days.map(d => <td key={d.date} className={(d.is_current ? 'cur ' : '') + (d.left < 0 ? 'neg' : '')}>{d.expected || d.actual ? fmtCents(d.left) : '—'}</td>)}</tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div className="card" ref={setupRef}>
+        <div className="row-between">
+          <h2 style={{ margin: 0 }}>Buckets</h2>
+          <button className="btn-secondary" onClick={() => setEditing('new')}>+ Add bucket</button>
+        </div>
+        {editing === 'new' && <BucketEditor b={null} accounts={accounts} cats={cats} onSaved={ok} onError={fail} onCancel={() => setEditing(null)} />}
+        {groups.map(g => (
+          <div key={g.key}>
+            <div className="group-head"><h2>{g.group}</h2><span className="sub">{fmtCents(g.list.reduce((s, b) => s + (b.weekly_amount || 0), 0))}/paycheck</span></div>
+            {g.list.map(b => (
+              <React.Fragment key={b.id}>
+                <div className="acct-row acct-click" onClick={() => setEditing(editing === b.id ? null : b.id)}>
+                  <div className="acct-main">
+                    <div className="acct-name">{b.name}</div>
+                    <div className="acct-meta muted">
+                      {b.kind === 'passthrough' ? 'moved to checking, then to retirement' : b.linked_name ? b.linked_name : 'not linked to an account'}
+                      {b.kind === 'card' && (b.card_name ? ' · pays ' + b.card_name : ' · card not linked')}
+                      {b.kind === 'bill' && (!b.target_amount ? ' · amount not set' : ' · ' + fmtCents(b.target_amount) + (b.due_day ? ' due on the ' + b.due_day + (['th','st','nd','rd'][(b.due_day % 10 > 3 || [11,12,13].includes(b.due_day)) ? 0 : b.due_day % 10]) : ' · due day not set'))}
+                      {b.goal_amount ? ' · goal ' + fmtCents(b.goal_amount) : ''}
+                    </div>
+                  </div>
+                  <div className="acct-bal"><div>{fmtCents(b.weekly_amount || 0)}</div><div className="acct-meta muted">per paycheck</div></div>
+                </div>
+                {editing === b.id && <BucketEditor b={b} accounts={accounts} cats={cats} onSaved={ok} onError={fail} onCancel={() => setEditing(null)} />}
+              </React.Fragment>
+            ))}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function Placeholder({ tab }) {
   return (
     <div className="card">
@@ -1508,9 +1850,10 @@ function App() {
         {me && tab === 'dashboard' && <SetupStatus me={me} />}
         {me && tab === 'settings' && <><Connections onChanged={refreshMe} /><CategoriesAndRules /></>}
         {me && tab === 'accounts' && <AccountsView />}
+        {me && tab === 'plan' && <PlanView />}
         {me && tab === 'transactions' && <TransactionsView key={JSON.stringify(drill)} initialFilter={drill} />}
         {me && tab === 'reports' && <ReportsView onDrill={(f) => { setDrill(f); setTab('transactions'); window.scrollTo(0, 0); }} />}
-        {me && !['dashboard', 'settings', 'accounts', 'transactions', 'reports'].includes(tab) && <Placeholder tab={current} />}
+        {me && !['dashboard', 'settings', 'accounts', 'transactions', 'reports', 'plan'].includes(tab) && <Placeholder tab={current} />}
       </main>
 
       <nav className="bottomnav">
