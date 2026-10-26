@@ -15,7 +15,7 @@ REDIRECT_URI = "https://zacharypals.github.io/Finance_Web_App/oauth.html"
 GOOGLE_CLIENT_ID = "760221993582-3nakfl51js22pij1am369v8cnhu4kr4e.apps.googleusercontent.com"
 # Comma-separated. Removing an email here locks that person out on their next request.
 ALLOWED_EMAILS = "znpals@gmail.com"
-PLAID_ENV = "sandbox"
+PLAID_ENV = "production"
 PLAID_REDIRECT_URI = "https://zacharypals.github.io/Finance_Web_App/plaid-oauth.html"
 
 [[d1_databases]]
