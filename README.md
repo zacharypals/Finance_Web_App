@@ -81,7 +81,12 @@ The first time you open Transactions, Reports or Settings, the starter categorie
 
 From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (applies 0004), then `wrangler deploy`. From the repo root: commit and push.
 
+## v0.5.1 deploy (read-limit fix)
+
+`wrangler deploy` from `worker` any time. Apply `0005_indexes.sql` (`wrangler d1 migrations apply finance-db --remote`) after the D1 daily read limit resets (midnight UTC).
+
 ## Conventions
+- **D1 free tier is 5M rows read/day.** Never write a query that scans all transactions per transaction (self-joins must be bounded by an indexed range), and avoid full-table passes on routine syncs.
 
 - Version lives in two places and must match: the `<!-- Finance Pal vX.Y.Z -->` comment and `APP_VERSION` in `index.html`. Worker version is `WORKER_VERSION` in `worker/src/index.js`.
 - Schema changes are new numbered files in `worker/migrations/`; never edit an applied one.

@@ -25,7 +25,7 @@ import {
 
 import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell } from './plan.js';
 
-const WORKER_VERSION = '0.5.0';
+const WORKER_VERSION = '0.5.1';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -265,7 +265,7 @@ async function listItems(env, user) {
     `SELECT a.id, a.item_id, a.name, a.display_name, a.mask, a.type, a.subtype, a.visibility, a.hidden,
             b.date AS balance_date, b.current, b.available, b.credit_limit,
             cs.statement_balance, cs.due_date, cs.minimum_payment,
-            (SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.id AND t.removed = 0) AS tx_count,
+            (SELECT MAX(t.date) FROM transactions t WHERE t.account_id = a.id) AS latest_tx,
             (SELECT COUNT(*) FROM holdings_snapshots h WHERE h.account_id = a.id
                AND h.date = (SELECT MAX(date) FROM holdings_snapshots WHERE account_id = a.id)) AS holdings_count
        FROM accounts a

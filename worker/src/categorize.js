@@ -97,33 +97,41 @@ export function ruleWhere(rule) {
   return { sql: parts.length ? parts.join(' AND ') : '0', params };
 }
 
+// Flags follow the category's kind. Computed inline in every UPDATE that sets a category,
+// so there is no separate full-table pass on normal runs.
+const kindIs = (kind, idExpr) => `COALESCE((SELECT kind = '${kind}' FROM categories WHERE id = ${idExpr}), 0)`;
+const mapKindIs = (kind, codeExpr) =>
+  `COALESCE((SELECT c.kind = '${kind}' FROM plaid_category_map m JOIN categories c ON c.id = m.category_id
+             WHERE m.household_id = ? AND m.pfc_detailed = ${codeExpr}), 0)`;
+
 function flagStatements(env, householdId) {
   const kindOf = `(SELECT kind FROM categories c WHERE c.id = transactions.category_id)`;
   const isT = `CASE WHEN ${kindOf} = 'transfer' THEN 1 ELSE 0 END`;
   const isI = `CASE WHEN ${kindOf} = 'income' THEN 1 ELSE 0 END`;
-  // Only rows whose flags actually change are written (keeps D1 write counts low).
   return [env.DB.prepare(
     `UPDATE transactions SET is_transfer = ${isT}, is_income = ${isI}
       WHERE account_id IN (${HH_ACCOUNTS}) AND (is_transfer != ${isT} OR is_income != ${isI})`
   ).bind(householdId)];
 }
 
-// Categorize every transaction still at 'none'. With reset=true, first clear everything
-// except manual choices (used by "Re-apply rules to all history").
-export async function categorize(env, householdId, { reset = false } = {}) {
+// Categorize transactions still at 'none' (cheap: uses the category_source index).
+//   windowDays — how far back to look for transfer pairs (10 on routine syncs, 120 on first run / reset)
+//   reset      — clear everything except manual choices first ("Re-apply to all history")
+export async function categorize(env, householdId, { reset = false, windowDays = 10 } = {}) {
   await ensureCategories(env, householdId);
   const rules = (await env.DB.prepare(
     'SELECT * FROM category_rules WHERE household_id = ? AND enabled = 1 ORDER BY priority, created_at'
   ).bind(householdId).all()).results;
-  let transfersId = (await env.DB.prepare(
+  const transfersId = (await env.DB.prepare(
     "SELECT id FROM categories WHERE household_id = ? AND name = 'Transfers' AND kind = 'transfer' AND archived = 0 LIMIT 1"
   ).bind(householdId).first() || {}).id;
+  if (reset) windowDays = 120;
 
   const scope = `account_id IN (${HH_ACCOUNTS})`;
   const stmts = [];
   if (reset) {
     stmts.push(env.DB.prepare(
-      `UPDATE transactions SET category_id = NULL, category_source = 'none', transfer_pair_id = NULL
+      `UPDATE transactions SET category_id = NULL, category_source = 'none', transfer_pair_id = NULL, is_transfer = 0, is_income = 0
         WHERE ${scope} AND category_source IN ('rule', 'plaid', 'auto')`
     ).bind(householdId));
   }
@@ -132,53 +140,50 @@ export async function categorize(env, householdId, { reset = false } = {}) {
     if (!r.category_id) continue;
     const w = ruleWhere(r);
     stmts.push(env.DB.prepare(
-      `UPDATE transactions SET category_id = ?, category_source = 'rule'
-        WHERE ${scope} AND category_source = 'none' AND removed = 0 AND ${w.sql}`
-    ).bind(r.category_id, householdId, ...w.params));
+      `UPDATE transactions SET category_id = ?, category_source = 'rule',
+              is_transfer = ${kindIs('transfer', '?')}, is_income = ${kindIs('income', '?')}
+        WHERE category_source = 'none' AND ${scope} AND removed = 0 AND ${w.sql}`
+    ).bind(r.category_id, r.category_id, r.category_id, householdId, ...w.params));
   }
   // 2. Plaid detailed, then primary.
-  stmts.push(env.DB.prepare(
-    `UPDATE transactions SET category_source = 'plaid', category_id =
-        (SELECT m.category_id FROM plaid_category_map m WHERE m.household_id = ? AND m.pfc_detailed = transactions.pfc_detailed)
-      WHERE ${scope} AND category_source = 'none' AND pfc_detailed IN
-        (SELECT pfc_detailed FROM plaid_category_map WHERE household_id = ?)`
-  ).bind(householdId, householdId, householdId));
-  stmts.push(env.DB.prepare(
-    `UPDATE transactions SET category_source = 'plaid', category_id =
-        (SELECT m.category_id FROM plaid_category_map m WHERE m.household_id = ? AND m.pfc_detailed = 'P:' || transactions.pfc_primary)
-      WHERE ${scope} AND category_source = 'none' AND ('P:' || pfc_primary) IN
-        (SELECT pfc_detailed FROM plaid_category_map WHERE household_id = ?)`
-  ).bind(householdId, householdId, householdId));
+  for (const code of ['transactions.pfc_detailed', `'P:' || transactions.pfc_primary`]) {
+    stmts.push(env.DB.prepare(
+      `UPDATE transactions SET category_source = 'plaid',
+              category_id = (SELECT m.category_id FROM plaid_category_map m WHERE m.household_id = ? AND m.pfc_detailed = ${code}),
+              is_transfer = ${mapKindIs('transfer', code)}, is_income = ${mapKindIs('income', code)}
+        WHERE category_source = 'none' AND ${scope}
+          AND ${code.replace(/transactions\./g, '')} IN (SELECT pfc_detailed FROM plaid_category_map WHERE household_id = ?)`
+    ).bind(householdId, householdId, householdId, householdId, householdId));
+  }
   // 3. Pairs: same amount out of one of your accounts and into another within 3 days → Transfers.
+  //    The ±3-day date range on t2 keeps this an index lookup per row, not a scan of all history.
   if (transfersId) {
     stmts.push(env.DB.prepare(
-      `UPDATE transactions SET category_id = ?, category_source = 'auto'
+      `UPDATE transactions SET category_id = ?, category_source = 'auto', is_transfer = 1, is_income = 0
         WHERE id IN (
           SELECT t1.id FROM transactions t1
-            JOIN transactions t2 ON t2.amount = -t1.amount AND t2.account_id != t1.account_id
-             AND ABS(julianday(t1.date) - julianday(t2.date)) <= 3
-           WHERE t1.account_id IN (${HH_ACCOUNTS}) AND t2.account_id IN (${HH_ACCOUNTS})
+            JOIN transactions t2 ON t2.date BETWEEN date(t1.date, '-3 days') AND date(t1.date, '+3 days')
+             AND t2.amount = -t1.amount AND t2.account_id != t1.account_id
+           WHERE t1.date >= date('now', ?)
+             AND t1.account_id IN (${HH_ACCOUNTS}) AND t2.account_id IN (${HH_ACCOUNTS})
              AND t1.amount != 0 AND t1.removed = 0 AND t2.removed = 0 AND t1.pending = 0 AND t2.pending = 0
              AND t1.category_source IN ('none', 'plaid')
              AND COALESCE((SELECT kind FROM categories c WHERE c.id = t1.category_id), '') NOT IN ('transfer', 'income')
-             AND COALESCE((SELECT kind FROM categories c WHERE c.id = t2.category_id), '') != 'income'
-             AND t1.date >= date('now', '-120 days'))`
-    ).bind(transfersId, householdId, householdId));
+             AND COALESCE((SELECT kind FROM categories c WHERE c.id = t2.category_id), '') != 'income')`
+    ).bind(transfersId, `-${windowDays} days`, householdId, householdId));
   }
-  stmts.push(...flagStatements(env, householdId));
+  if (reset) stmts.push(...flagStatements(env, householdId));
   await env.DB.batch(stmts);
 }
 
 // Apply ONE rule to all history (overrides plaid/auto/other-rule choices, never manual).
 export async function applyRuleToHistory(env, householdId, rule) {
   const w = ruleWhere(rule);
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE transactions SET category_id = ?, category_source = 'rule'
-        WHERE account_id IN (${HH_ACCOUNTS}) AND category_source != 'manual' AND removed = 0 AND ${w.sql}`
-    ).bind(rule.category_id, householdId, ...w.params),
-    ...flagStatements(env, householdId),
-  ]);
+  await env.DB.prepare(
+    `UPDATE transactions SET category_id = ?, category_source = 'rule',
+            is_transfer = ${kindIs('transfer', '?')}, is_income = ${kindIs('income', '?')}
+      WHERE account_id IN (${HH_ACCOUNTS}) AND category_source != 'manual' AND removed = 0 AND ${w.sql}`
+  ).bind(rule.category_id, rule.category_id, rule.category_id, householdId, ...w.params).run();
 }
 
 export async function refreshFlags(env, householdId) {

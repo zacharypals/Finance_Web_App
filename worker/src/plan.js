@@ -230,7 +230,8 @@ export async function putCell(env, user, body) {
     .bind(user.id, body.pay_date, b.id).first() || { amount: null, done: 0 };
   const amount = 'amount' in body ? centsOrNull(body.amount) : cur.amount;
   if (Number.isNaN(amount)) return json({ error: 'bad_request', message: 'Amount is invalid.' }, 400);
-  const done = 'done' in body ? (body.done ? 1 : 0) : cur.done;
+  // done: 1 = you ticked it, -1 = you unticked an automatic match, 0 = not set
+  const done = 'done' in body ? (body.done === -1 ? -1 : body.done ? 1 : 0) : cur.done;
   if (amount === null && !done) {
     await env.DB.prepare('DELETE FROM plan_cells WHERE user_id = ? AND pay_date = ? AND bucket_id = ?').bind(user.id, body.pay_date, b.id).run();
   } else {
@@ -263,7 +264,9 @@ export async function getPlan(env, user, weeks) {
       ORDER BY b.sort, b.name`
   ).bind(user.id, user.id, user.household_id).all()).results;
 
-  if (!template) return json({ template: null, buckets, paydays: [], cells: {}, funding: [], moves: null, today });
+  const archived = (await env.DB.prepare(`SELECT b.id, b.name, b.kind FROM buckets b WHERE ${BUCKET_SCOPE} AND b.archived = 1 ORDER BY b.name`)
+    .bind(user.id, user.household_id).all()).results;
+  if (!template) return json({ template: null, buckets, archived, paydays: [], cells: {}, funding: [], moves: null, today });
 
   const count = Math.min(Math.max(weeks || 8, 2), 26);
   const { list: days, last } = paydays(template, today, count);
@@ -305,9 +308,9 @@ export async function getPlan(env, user, weeks) {
       const o = overrides.get(b.id + '|' + d);
       const amount = o && o.amount !== null ? o.amount : (b.weekly_amount || 0);
       // Auto-tick: a deposit of exactly this amount into the linked vault within the payday's week.
-      const auto = !!(amount > 0 && b.linked_account_id && d <= today &&
+      const auto = !!(!(o && o.done === -1) && amount > 0 && b.linked_account_id && d <= today &&
         vaultIns.some((v) => v.account_id === b.linked_account_id && v.amount === amount && v.date >= addDays(d, -2) && v.date <= addDays(d, 6)));
-      cells[b.id][d] = { amount, override: !!(o && o.amount !== null), done: !!(o && o.done), auto };
+      cells[b.id][d] = { amount, override: !!(o && o.amount !== null), done: !!(o && o.done === 1), auto };
     }
   }
 
@@ -371,5 +374,5 @@ export async function getPlan(env, user, weeks) {
     })),
   };
 
-  return json({ template, buckets, paydays: pays, cells, funding, moves, today });
+  return json({ template, buckets, archived, paydays: pays, cells, funding, moves, today });
 }

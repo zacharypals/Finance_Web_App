@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.5.0 -->
+<!-- Finance Pal v0.5.1 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -284,7 +284,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.5.1';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -480,7 +480,7 @@ function AccountRow({ a }) {
         <div className="acct-name">{a.display_name || a.name}{a.mask && <span className="muted"> ••{a.mask}</span>}</div>
         <div className="acct-meta muted">
           {a.subtype || a.type}
-          {a.tx_count > 0 && <> · {a.tx_count} transactions</>}
+          {a.latest_tx && <> · latest transaction {fmtDate(a.latest_tx)}</>}
           {a.holdings_count > 0 && <> · {a.holdings_count} holdings</>}
           {isCredit && a.statement_balance !== null && a.statement_balance !== undefined &&
             <> · statement {fmtCents(a.statement_balance)} due {fmtDate(a.due_date)}</>}
@@ -1588,6 +1588,10 @@ function PlanView() {
     } catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
     finally { setBusy(false); }
   }
+  async function archive(b, on) {
+    try { await api('/api/buckets/' + b.id, { method: 'PATCH', body: JSON.stringify({ archived: on }) }); ok(b.name + (on ? ' archived.' : ' restored.')); }
+    catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+  }
   const editBucket = (id) => { setEditing(id); setTimeout(() => setupRef.current && setupRef.current.scrollIntoView({ behavior: 'smooth' }), 50); };
 
   if (!plan) return <div className="card">{notice ? <div className="error-box">{notice.text}</div> : <div className="spinner" style={{ margin: '24px auto' }} />}</div>;
@@ -1624,10 +1628,10 @@ function PlanView() {
           <div className="moves">
             {moves.items.map(m => (
               <label key={m.bucket_id} className={'move' + (m.done || m.auto ? ' move-done' : '')}>
-                <input type="checkbox" checked={m.done || m.auto} disabled={m.auto} onChange={e => toggleMove(m, e.target.checked)} />
+                <input type="checkbox" checked={m.done || m.auto} onChange={e => toggleMove(m, e.target.checked ? true : (m.auto ? -1 : false))} />
                 <span className="move-amt">{fmtCents(m.amount)}</span>
                 <span>→ {m.name}{m.to && m.to.toLowerCase() !== m.name.toLowerCase() ? <span className="muted"> ({m.to})</span> : null}</span>
-                {m.auto && <span className="muted acct-meta">seen in your account</span>}
+                {m.auto && <span className="muted acct-meta" title="Untick if this deposit wasn’t this move">auto: matched a {fmtCents(m.amount)} deposit</span>}
               </label>
             ))}
           </div>
@@ -1721,12 +1725,24 @@ function PlanView() {
                     </div>
                   </div>
                   <div className="acct-bal"><div>{fmtCents(b.weekly_amount || 0)}</div><div className="acct-meta muted">per paycheck</div></div>
+                  <button className="btn-text" title="Archive — hides it from the plan; you can restore it below" onClick={e => { e.stopPropagation(); archive(b, true); }}>Archive</button>
                 </div>
                 {editing === b.id && <BucketEditor b={b} accounts={accounts} cats={cats} onSaved={ok} onError={fail} onCancel={() => setEditing(null)} />}
               </React.Fragment>
             ))}
           </div>
         ))}
+        {plan.archived && plan.archived.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div className="group-head"><h2>Archived</h2><span className="muted acct-meta">kept so past plans still add up</span></div>
+            {plan.archived.map(b => (
+              <div key={b.id} className="acct-row dim">
+                <div className="acct-main"><div className="acct-name">{b.name}</div></div>
+                <button className="btn-text" onClick={() => archive(b, false)}>Restore</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </>
   );

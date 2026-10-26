@@ -1,6 +1,6 @@
 // Phase 3: transactions list/edit, categories, rules, reports.
 import { json } from './util.js';
-import { ensureCategories, categorize, applyRuleToHistory, refreshFlags, HH_ACCOUNTS } from './categorize.js';
+import { ensureCategories, categorize, applyRuleToHistory, HH_ACCOUNTS } from './categorize.js';
 
 // Transactions the caller may see: on visible, non-hidden accounts.
 const TX_FROM = `FROM transactions t
@@ -13,7 +13,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // First visit after Phase 3 deploys: create the starter categories, then categorize all history once.
 async function ensureReady(env, householdId) {
-  if (await ensureCategories(env, householdId)) await categorize(env, householdId);
+  if (await ensureCategories(env, householdId)) await categorize(env, householdId, { windowDays: 120 });
 }
 
 // ── Categories ─────────────────────────────────────────
@@ -119,7 +119,11 @@ export async function patchTransactions(env, user, ids, body) {
     const cid = body.category_id || null;
     if (!(await validCategory(env, user, cid))) return json({ error: 'bad_request', message: 'Unknown category.' }, 400);
     for (const id of ok) {
-      stmts.push(env.DB.prepare("UPDATE transactions SET category_id = ?, category_source = 'manual', transfer_pair_id = NULL WHERE id = ?").bind(cid, id));
+      stmts.push(env.DB.prepare(
+        `UPDATE transactions SET category_id = ?, category_source = 'manual', transfer_pair_id = NULL,
+                is_transfer = COALESCE((SELECT kind = 'transfer' FROM categories WHERE id = ?), 0),
+                is_income = COALESCE((SELECT kind = 'income' FROM categories WHERE id = ?), 0)
+          WHERE id = ?`).bind(cid, cid, cid, id));
     }
   }
   if ('notes' in body && ok.length === 1) {
@@ -128,7 +132,6 @@ export async function patchTransactions(env, user, ids, body) {
   }
   if (!stmts.length) return json({ error: 'bad_request', message: 'Nothing to change.' }, 400);
   await env.DB.batch(stmts);
-  await refreshFlags(env, user.household_id);
   return json({ ok: true, updated: ok.length });
 }
 
