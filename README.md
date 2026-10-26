@@ -68,6 +68,10 @@ wrangler secret put PLAID_SECRET        # paste the Production secret
 
 change `PLAID_ENV = "production"` in `wrangler.toml`, and `wrangler deploy`.
 
+## Phase 2 deploy (Accounts & net worth)
+
+From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (applies 0003), then `wrangler deploy`. From the repo root: commit and push.
+
 ## Conventions
 
 - Version lives in two places and must match: the `<!-- Finance Pal vX.Y.Z -->` comment and `APP_VERSION` in `index.html`. Worker version is `WORKER_VERSION` in `worker/src/index.js`.

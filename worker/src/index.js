@@ -16,8 +16,9 @@ import { json, sha256Hex } from './util.js';
 import { encryptToken, decryptToken } from './crypto.js';
 import { plaid, PlaidError, verifyPlaidWebhook } from './plaid.js';
 import { syncItem, runScheduledSync } from './sync.js';
+import { listAccounts, patchAccounts, putManualBalance, deleteManualBalance, monthLevels, netWorth, holdings } from './accounts.js';
 
-const WORKER_VERSION = '0.2.0';
+const WORKER_VERSION = '0.3.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -82,6 +83,23 @@ async function routeApi(req, env, ctx, url, user) {
   if (path === '/api/plaid/link-token' && method === 'POST') return linkToken(req, env, url, user);
   if (path === '/api/plaid/exchange' && method === 'POST') return exchangePublicToken(req, env, user);
   if (path === '/api/items' && method === 'GET') return listItems(env, user);
+
+  // Phase 2: accounts & net worth
+  if (path === '/api/accounts' && method === 'GET') return listAccounts(env, user);
+  if (path === '/api/accounts/bulk' && method === 'POST') {
+    const body = await req.json().catch(() => ({}));
+    return patchAccounts(env, user, Array.isArray(body.ids) ? body.ids.map(String) : [], body.set);
+  }
+  if (path === '/api/levels' && method === 'GET') return monthLevels(env, user, Number(url.searchParams.get('months')));
+  if (path === '/api/networth' && method === 'GET') return netWorth(env, user, Number(url.searchParams.get('days')));
+  const am = path.match(/^\/api\/accounts\/([^/]+)(?:\/(holdings|balances)(?:\/(\d{4}-\d{2}-\d{2}))?)?$/);
+  if (am) {
+    const [, accountId, sub, date] = am;
+    if (!sub && method === 'PATCH') return patchAccounts(env, user, [accountId], await req.json().catch(() => ({})));
+    if (sub === 'holdings' && method === 'GET') return holdings(env, user, accountId);
+    if (sub === 'balances' && !date && method === 'POST') return putManualBalance(env, user, accountId, await req.json().catch(() => ({})));
+    if (sub === 'balances' && date && method === 'DELETE') return deleteManualBalance(env, user, accountId, date);
+  }
 
   const m = path.match(/^\/api\/items\/([^/]+)(\/(sync|reconnected))?$/);
   if (m) {

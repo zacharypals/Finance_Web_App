@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.2.0 -->
+<!-- Finance Pal v0.3.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -18,6 +18,7 @@
 <script src="https://unpkg.com/@babel/standalone@7.26.5/babel.min.js"></script>
 <!-- Plaid requires Link to be loaded from its own CDN (no pinned versions are offered). -->
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 :root {
   --bg: #f4f6f5;
@@ -35,12 +36,16 @@
   --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
   --shadow: 0 1px 3px rgba(20, 40, 30, .08);
   --nav-h: 56px;
+  --chart-line: #16805a;   /* validated: chroma/contrast pass on light surface */
+  --chart-grid: #e8ecea;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #121815; --paper: #1a221e; --ink: #e6ece9; --ink-light: #a3b0a9; --ink-faint: #5d6a63;
     --border: #2a3530; --accent: #3fa37c; --accent-dark: #174f3c; --accent-light: #1d2f27;
     --red: #e0675b; --red-light: #3a2220;
+    --chart-line: #3fa37c; /* validated on dark surface */
+    --chart-grid: #26302b;
   }
 }
 * { box-sizing: border-box; }
@@ -96,7 +101,10 @@ button:disabled { opacity: .55; cursor: default; }
 .acct-list { margin-top: 10px; }
 .acct-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .acct-row:last-child { border-bottom: 0; }
+.acct-main { flex: 1; min-width: 0; }
 .acct-name { font-weight: 500; }
+.btn-primary.btn-inline { width: auto; }
+.editor input[type=text], .editor select { max-width: 380px; }
 .acct-meta { font-size: 12.5px; }
 .acct-bal { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ok-box { background: var(--accent-light); color: var(--accent); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 14px; margin: 12px 0; }
@@ -104,6 +112,49 @@ button:disabled { opacity: .55; cursor: default; }
 @media (prefers-color-scheme: dark) {
   .pill-warn, .warn-box { background: #3a3018; color: #e8c46a; }
 }
+
+/* Accounts (Phase 2) */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--shadow); }
+.tile-label { font-size: 12.5px; color: var(--ink-light); }
+.tile-value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tile-hero .tile-value { font-size: 28px; }
+.seg { display: inline-flex; background: var(--bg); border-radius: var(--radius-sm); padding: 2px; }
+.seg button { background: none; border: 0; padding: 5px 10px; border-radius: 6px; font-size: 13px; color: var(--ink-light); }
+.seg button.active { background: var(--paper); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); }
+.chart-box { position: relative; height: 240px; margin-top: 12px; }
+.empty-note { color: var(--ink-light); font-size: 14px; padding: 28px 8px; text-align: center; }
+.group-head { display: flex; justify-content: space-between; align-items: baseline; margin: 18px 0 4px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+.group-head h2 { margin: 0; font-size: 15px; }
+.group-head .sub { font-variant-numeric: tabular-nums; font-weight: 600; }
+.acct-click { cursor: pointer; }
+.acct-click:hover { background: var(--bg); }
+.acct-row.dim { opacity: .55; }
+.acct-row input[type=checkbox] { width: 18px; height: 18px; margin: 2px 10px 0 0; flex: none; }
+.star { background: none; border: 0; font-size: 16px; color: var(--ink-faint); padding: 0 6px; line-height: 1; }
+.star.on { color: var(--gold); }
+.editor { background: var(--bg); border-radius: var(--radius-md); padding: 14px; margin: 4px 0 10px; display: grid; gap: 10px; }
+.editor label { font-size: 13px; color: var(--ink-light); display: grid; gap: 4px; }
+.editor .checks { display: flex; gap: 16px; flex-wrap: wrap; }
+.editor .checks label { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+input[type=text], input[type=date], input[type=number], select {
+  font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--paper); color: var(--ink); }
+.bulkbar { position: sticky; top: 64px; z-index: 50; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  background: var(--ink); color: var(--paper); padding: 10px 12px; border-radius: var(--radius-md); margin: 12px 0; }
+.bulkbar button, .bulkbar select { font-size: 13px; padding: 6px 10px; border-radius: var(--radius-sm); border: 0; }
+.levels { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.levels th, .levels td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.levels th:first-child, .levels td:first-child { text-align: left; white-space: normal; }
+.levels thead th { font-size: 12px; color: var(--ink-light); font-weight: 600; }
+.levels tfoot td { font-weight: 700; border-bottom: 0; }
+.levels .asof { display: block; font-size: 11px; color: var(--ink-faint); }
+.table-scroll { overflow-x: auto; margin: 0 -4px; }
+.holdings { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.holdings td, .holdings th { padding: 6px 4px; border-bottom: 1px solid var(--border); text-align: right; }
+.holdings td:first-child, .holdings th:first-child { text-align: left; }
+.inline-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-top: 12px; }
+.inline-form label { font-size: 12px; color: var(--ink-light); display: grid; gap: 4px; }
 
 /* Bottom nav (mobile) */
 .bottomnav { display: none; }
@@ -143,7 +194,7 @@ button:disabled { opacity: .55; cursor: default; }
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -470,6 +521,354 @@ function Connections({ onChanged }) {
   );
 }
 
+// ─────────────────────────────────────────────
+// ACCOUNTS & NET WORTH (Phase 2)
+// ─────────────────────────────────────────────
+const GROUPS = [
+  { key: 'cash', label: 'Cash' },
+  { key: 'vault', label: 'Vaults' },
+  { key: 'credit', label: 'Credit cards' },
+  { key: 'investment', label: 'Investments' },
+  { key: 'loan', label: 'Loans' },
+  { key: 'other', label: 'Other' },
+];
+const isLiabilityGroup = (g) => g === 'credit' || g === 'loan';
+const acctName = (a) => a.display_name || a.name;
+const usdCompact = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 });
+const counts = (a) => !a.hidden && a.include_in_net_worth;
+function monthLabel(key) {
+  const [y, m] = key.split('-').map(Number);
+  const label = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' }) + ' 1';
+  return y === new Date().getFullYear() ? label : label + ' ’' + String(y).slice(2);
+}
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function NetWorthChart({ series }) {
+  const canvasRef = React.useRef(null);
+  const chartRef = React.useRef(null);
+  useEffect(() => {
+    if (!window.Chart || !canvasRef.current || series.length < 2) return;
+    const ink = cssVar('--ink-light'), grid = cssVar('--chart-grid'), line = cssVar('--chart-line');
+    chartRef.current = new window.Chart(canvasRef.current, {
+      type: 'line',
+      data: {
+        labels: series.map(s => s.date),
+        datasets: [{ label: 'Net worth', data: series.map(s => s.net / 100), borderColor: line, backgroundColor: line,
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 12, tension: 0.15 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: {
+            title: (items) => fmtDate(items[0].label),
+            label: (item) => ' ' + usd.format(item.parsed.y),
+          } },
+        },
+        scales: {
+          x: { grid: { display: false }, border: { color: grid },
+               ticks: { color: ink, maxTicksLimit: 6, maxRotation: 0, callback: function (v) { return fmtDate(this.getLabelForValue(v)); } } },
+          y: { grid: { color: grid }, border: { display: false },
+               ticks: { color: ink, maxTicksLimit: 5, callback: (v) => usdCompact.format(v) } },
+        },
+      },
+    });
+    return () => { chartRef.current && chartRef.current.destroy(); chartRef.current = null; };
+  }, [series]);
+
+  if (!window.Chart && series.length >= 2) return <div className="empty-note">The chart library didn’t load — check your connection and reload.</div>;
+  if (series.length < 2) {
+    return <div className="empty-note">The chart starts filling in tomorrow. Finance Pal records every balance once a day{series.length === 1 ? ' — today’s net worth is ' + fmtCents(series[0].net) : ''}.</div>;
+  }
+  return <div className="chart-box"><canvas ref={canvasRef} role="img" aria-label={'Net worth over time, latest ' + fmtCents(series[series.length - 1].net)} /></div>;
+}
+
+function Holdings({ accountId }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    api('/api/accounts/' + accountId + '/holdings')
+      .then(r => setRows(r.holdings))
+      .catch(e => { if (!(e instanceof AuthError)) setErr(e.message); });
+  }, [accountId]);
+  if (err) return <div className="error-box">{err}</div>;
+  if (!rows) return <div className="muted acct-meta">Loading holdings…</div>;
+  if (!rows.length) return <div className="muted acct-meta">No holdings reported.</div>;
+  const total = rows.reduce((s, h) => s + (h.value || 0), 0);
+  return (
+    <div className="table-scroll">
+      <table className="holdings">
+        <thead><tr><th>Holding</th><th>Shares</th><th>Price</th><th>Value</th><th>% of acct</th></tr></thead>
+        <tbody>{rows.map((h, i) => (
+          <tr key={i}>
+            <td><b>{h.ticker && !h.ticker.startsWith('CUR:') ? h.ticker : (h.type === 'cash' || (h.ticker || '').startsWith('CUR:') ? 'Cash' : '')}</b> <span className="muted">{h.name && h.ticker !== h.name ? h.name : ''}</span></td>
+            <td>{h.quantity !== null && h.type !== 'cash' ? Number(h.quantity).toLocaleString('en-US', { maximumFractionDigits: 4 }) : ''}</td>
+            <td>{h.type !== 'cash' ? fmtCents(h.price) : ''}</td>
+            <td>{fmtCents(h.value)}</td>
+            <td>{total ? Math.round((h.value || 0) / total * 1000) / 10 + '%' : ''}</td>
+          </tr>))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AccountEditor({ a, onSaved, onError }) {
+  const [form, setForm] = useState({
+    display_name: a.display_name || '', account_group: a.grp,
+    include_in_net_worth: !!a.include_in_net_worth, hidden: !!a.hidden, track_levels: !!a.track_levels,
+    visibility: a.visibility,
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  async function save() {
+    setSaving(true);
+    try {
+      await api('/api/accounts/' + a.id, { method: 'PATCH', body: JSON.stringify({ ...form, display_name: form.display_name.trim() || null }) });
+      onSaved('Saved ' + (form.display_name.trim() || a.name) + '.');
+    } catch (e) {
+      if (!(e instanceof AuthError)) onError(e.message);
+    } finally { setSaving(false); }
+  }
+  return (
+    <div className="editor" onClick={e => e.stopPropagation()}>
+      {!a.is_mine && <div className="muted acct-meta">Shared with you by its owner — only they can change its settings.</div>}
+      {a.is_mine && <>
+        <label>Name <input type="text" value={form.display_name} placeholder={a.name} maxLength={60} onChange={e => set('display_name', e.target.value)} /></label>
+        <label>Group
+          <select value={form.account_group} onChange={e => set('account_group', e.target.value)}>
+            {GROUPS.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
+          </select>
+        </label>
+        <div className="checks">
+          <label><input type="checkbox" checked={form.include_in_net_worth} onChange={e => set('include_in_net_worth', e.target.checked)} /> Count in net worth</label>
+          <label><input type="checkbox" checked={form.track_levels} onChange={e => set('track_levels', e.target.checked)} /> Show in monthly levels</label>
+          <label><input type="checkbox" checked={form.hidden} onChange={e => set('hidden', e.target.checked)} /> Hide everywhere</label>
+          <label><input type="checkbox" checked={form.visibility === 'household'} onChange={e => set('visibility', e.target.checked ? 'household' : 'private')} /> Share with household</label>
+        </div>
+        <div className="btn-row"><button className="btn-primary btn-inline" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</button></div>
+      </>}
+      {a.type === 'investment' && <Holdings accountId={a.id} />}
+      <div className="muted acct-meta">{a.institution_name}{a.official_name ? ' · ' + a.official_name : ''} · balance as of {fmtDate(a.balance_date)}</div>
+    </div>
+  );
+}
+
+function MonthlyLevels({ accounts, levels, onChanged, onError }) {
+  const tracked = accounts.filter(a => !a.hidden && a.track_levels);
+  const rows = tracked.length ? tracked : accounts.filter(a => !a.hidden && (a.grp === 'vault' || a.grp === 'investment'));
+  const firstWithData = levels.months.findIndex(m => rows.some(a => (levels.values[a.id] || {})[m]));
+  const months = firstWithData === -1 ? [] : levels.months.slice(firstWithData);
+  const [form, setForm] = useState({ account: '', date: '', amount: '' });
+  const [saving, setSaving] = useState(false);
+
+  const cell = (a, m) => (levels.values[a.id] || {})[m];
+  const signed = (a, v) => (isLiabilityGroup(a.grp) ? -v : v);
+  const colTotal = (m) => rows.some(a => cell(a, m)) ? rows.reduce((s, a) => { const c = cell(a, m); return c ? s + signed(a, c.current || 0) : s; }, 0) : null;
+  const nowTotal = rows.reduce((s, a) => s + signed(a, a.current || 0), 0);
+
+  async function addPast(e) {
+    e.preventDefault();
+    const cents = Math.round(parseFloat(String(form.amount).replace(/[$,]/g, '')) * 100);
+    if (!form.account || !form.date || !Number.isFinite(cents)) { onError('Pick an account, a date and an amount.'); return; }
+    setSaving(true);
+    try {
+      await api('/api/accounts/' + form.account + '/balances', { method: 'POST', body: JSON.stringify({ date: form.date, current_cents: cents }) });
+      setForm({ account: '', date: '', amount: '' });
+      onChanged('Past balance added.');
+    } catch (err) {
+      if (!(err instanceof AuthError)) onError(err.message);
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="card">
+      <h2>Monthly levels</h2>
+      <p className="muted acct-meta" style={{ marginTop: -6 }}>
+        Balance at the start of each month.{months.length === 0 ? ' Columns appear from the 1st of next month, or add a past balance below (for example your Oct 1 numbers).' : ''} {tracked.length ? '' : 'Showing vaults and investments — click ☆ on any account to choose exactly which appear here.'}
+      </p>
+      {rows.length === 0 ? <div className="empty-note">No accounts to show yet.</div> : (
+        <div className="table-scroll">
+          <table className="levels">
+            <thead><tr><th>Account</th>{months.map(m => <th key={m}>{monthLabel(m)}</th>)}<th>Now</th></tr></thead>
+            <tbody>{rows.map(a => (
+              <tr key={a.id}>
+                <td>{acctName(a)}</td>
+                {months.map(m => {
+                  const c = cell(a, m);
+                  if (!c) return <td key={m} className="muted">—</td>;
+                  const late = !c.date.endsWith('-01');
+                  return <td key={m} title={c.source === 'manual' ? 'Entered by hand' : ''}>
+                    {fmtCents(c.current)}{c.source === 'manual' ? ' ✎' : ''}
+                    {late && <span className="asof">as of {fmtDate(c.date)}</span>}
+                  </td>;
+                })}
+                <td>{fmtCents(a.current)}</td>
+              </tr>))}
+            </tbody>
+            <tfoot><tr><td>Total</td>{months.map(m => <td key={m}>{fmtCents(colTotal(m))}</td>)}<td>{fmtCents(nowTotal)}</td></tr></tfoot>
+          </table>
+        </div>
+      )}
+      <form className="inline-form" onSubmit={addPast}>
+        <label>Add a past balance
+          <select value={form.account} onChange={e => setForm(f => ({ ...f, account: e.target.value }))}>
+            <option value="">Account…</option>
+            {accounts.filter(a => a.is_mine && !a.hidden).map(a => <option key={a.id} value={a.id}>{acctName(a)}</option>)}
+          </select>
+        </label>
+        <label>Date<input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} /></label>
+        <label>Balance<input type="text" inputMode="decimal" placeholder="10,555.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} style={{ width: 120 }} /></label>
+        <button className="btn-secondary" disabled={saving}>{saving ? 'Adding…' : 'Add'}</button>
+      </form>
+    </div>
+  );
+}
+
+function AccountsView() {
+  const [accounts, setAccounts] = useState(null);
+  const [levels, setLevels] = useState({ months: [], values: {} });
+  const [series, setSeries] = useState([]);
+  const [range, setRange] = useState(365);
+  const [open, setOpen] = useState(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [showHidden, setShowHidden] = useState(false);
+  const [notice, setNotice] = useState(null);
+  const [bulkGroup, setBulkGroup] = useState('vault');
+
+  const load = useCallback(async () => {
+    try {
+      const [a, l] = await Promise.all([api('/api/accounts'), api('/api/levels?months=6')]);
+      setAccounts(a.accounts); setLevels(l);
+    } catch (e) {
+      if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Couldn’t load accounts: ' + e.message });
+    }
+  }, []);
+  const loadSeries = useCallback(async () => {
+    try { setSeries((await api('/api/networth?days=' + range)).series); }
+    catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Couldn’t load net worth: ' + e.message }); }
+  }, [range]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadSeries(); }, [loadSeries]);
+
+  const ok = (text) => { setNotice({ kind: 'ok', text }); setOpen(null); load(); loadSeries(); };
+  const fail = (text) => setNotice({ kind: 'err', text });
+
+  async function bulk(set, label) {
+    const ids = [...selected];
+    if (!ids.length) return;
+    try {
+      const r = await api('/api/accounts/bulk', { method: 'POST', body: JSON.stringify({ ids, set }) });
+      setSelected(new Set());
+      ok(label + ' — ' + r.updated + ' account' + (r.updated === 1 ? '' : 's') + '.');
+    } catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+  }
+  async function toggleStar(a) {
+    try {
+      await api('/api/accounts/' + a.id, { method: 'PATCH', body: JSON.stringify({ track_levels: !a.track_levels }) });
+      load();
+    } catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+  }
+
+  if (!accounts) return <div className="card">{notice ? <div className="error-box">{notice.text}</div> : <div className="spinner" style={{ margin: '24px auto' }} />}</div>;
+  if (!accounts.length) return <div className="card"><h1>Accounts</h1><p className="muted">No accounts yet — link a bank in <b>Settings</b>.</p></div>;
+
+  const live = accounts.filter(counts);
+  const sumGroup = (g) => live.filter(a => a.grp === g).reduce((s, a) => s + (a.current || 0), 0);
+  const assets = live.filter(a => !isLiabilityGroup(a.grp)).reduce((s, a) => s + (a.current || 0), 0);
+  const owed = live.filter(a => isLiabilityGroup(a.grp)).reduce((s, a) => s + (a.current || 0), 0);
+  const hiddenCount = accounts.filter(a => a.hidden).length;
+  const visible = accounts.filter(a => showHidden || !a.hidden);
+  const toggleSel = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  return (
+    <>
+      <div className="tiles">
+        <div className="tile tile-hero"><div className="tile-label">Net worth</div><div className="tile-value">{fmtCents(assets - owed)}</div></div>
+        <div className="tile"><div className="tile-label">Cash</div><div className="tile-value">{fmtCents(sumGroup('cash'))}</div></div>
+        <div className="tile"><div className="tile-label">Vaults</div><div className="tile-value">{fmtCents(sumGroup('vault'))}</div></div>
+        <div className="tile"><div className="tile-label">Investments</div><div className="tile-value">{fmtCents(sumGroup('investment'))}</div></div>
+        <div className="tile"><div className="tile-label">Credit owed</div><div className="tile-value">{fmtCents(sumGroup('credit'))}</div></div>
+      </div>
+
+      {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
+
+      <div className="card">
+        <div className="row-between">
+          <h2 style={{ margin: 0 }}>Net worth</h2>
+          <div className="seg">
+            {[[90, '3M'], [365, '1Y'], [3650, 'All']].map(([d, l]) =>
+              <button key={d} className={range === d ? 'active' : ''} onClick={() => setRange(d)}>{l}</button>)}
+          </div>
+        </div>
+        <NetWorthChart series={series} />
+      </div>
+
+      <MonthlyLevels accounts={accounts} levels={levels} onChanged={ok} onError={fail} />
+
+      <div className="card">
+        <div className="row-between">
+          <h2 style={{ margin: 0 }}>All accounts</h2>
+          <div className="btn-row">
+            {hiddenCount > 0 && <button className="btn-text" onClick={() => setShowHidden(v => !v)}>{showHidden ? 'Hide hidden' : 'Show ' + hiddenCount + ' hidden'}</button>}
+            <button className="btn-secondary" onClick={() => { setSelecting(v => !v); setSelected(new Set()); setOpen(null); }}>{selecting ? 'Done' : 'Select'}</button>
+          </div>
+        </div>
+
+        {selecting && (
+          <div className="bulkbar">
+            <span>{selected.size} selected</span>
+            <select value={bulkGroup} onChange={e => setBulkGroup(e.target.value)}>
+              {GROUPS.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
+            </select>
+            <button disabled={!selected.size} onClick={() => bulk({ account_group: bulkGroup }, 'Moved to ' + GROUPS.find(g => g.key === bulkGroup).label)}>Move</button>
+            <button disabled={!selected.size} onClick={() => bulk({ hidden: true }, 'Hidden')}>Hide</button>
+            <button disabled={!selected.size} onClick={() => bulk({ hidden: false }, 'Unhidden')}>Unhide</button>
+            <button disabled={!selected.size} onClick={() => bulk({ include_in_net_worth: false }, 'Excluded from net worth')}>Exclude from net worth</button>
+            <button disabled={!selected.size} onClick={() => bulk({ include_in_net_worth: true }, 'Included in net worth')}>Include</button>
+            <button disabled={!selected.size} onClick={() => bulk({ track_levels: true }, 'Added to monthly levels')}>☆ Levels</button>
+          </div>
+        )}
+
+        {GROUPS.map(g => {
+          const list = visible.filter(a => a.grp === g.key);
+          if (!list.length) return null;
+          const subtotal = list.filter(counts).reduce((s, a) => s + (a.current || 0), 0);
+          return (
+            <div key={g.key}>
+              <div className="group-head"><h2>{g.label}</h2><span className="sub">{fmtCents(subtotal)}</span></div>
+              {list.map(a => (
+                <React.Fragment key={a.id}>
+                  <div className={'acct-row acct-click' + (a.hidden || !a.include_in_net_worth ? ' dim' : '')}
+                       onClick={() => selecting ? (a.is_mine && toggleSel(a.id)) : setOpen(open === a.id ? null : a.id)}>
+                    {selecting && <input type="checkbox" checked={selected.has(a.id)} disabled={!a.is_mine} onChange={() => toggleSel(a.id)} onClick={e => e.stopPropagation()} />}
+                    <div className="acct-main">
+                      <div className="acct-name">{acctName(a)}{a.mask && <span className="muted"> ••{a.mask}</span>}</div>
+                      <div className="acct-meta muted">
+                        {a.institution_name}
+                        {a.hidden ? ' · hidden' : ''}{!a.include_in_net_worth ? ' · not in net worth' : ''}
+                        {a.grp === 'credit' && a.statement_balance !== null && <> · statement {fmtCents(a.statement_balance)} due {fmtDate(a.due_date)}</>}
+                        {a.holdings_count > 0 && <> · {a.holdings_count} holdings</>}
+                      </div>
+                    </div>
+                    {a.is_mine && !selecting && <button className={'star' + (a.track_levels ? ' on' : '')} title="Show in monthly levels" aria-label="Show in monthly levels"
+                      onClick={e => { e.stopPropagation(); toggleStar(a); }}>{a.track_levels ? '★' : '☆'}</button>}
+                    <div className="acct-bal"><div>{fmtCents(a.current)}</div>
+                      <div className="acct-meta muted">{isLiabilityGroup(a.grp) ? 'owed' : ''}</div></div>
+                  </div>
+                  {open === a.id && !selecting && <AccountEditor a={a} onSaved={ok} onError={fail} />}
+                </React.Fragment>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 function Placeholder({ tab }) {
   return (
     <div className="card">
@@ -586,7 +985,8 @@ function App() {
       <main>
         {me && tab === 'dashboard' && <SetupStatus me={me} />}
         {me && tab === 'settings' && <Connections onChanged={refreshMe} />}
-        {me && tab !== 'dashboard' && tab !== 'settings' && <Placeholder tab={current} />}
+        {me && tab === 'accounts' && <AccountsView />}
+        {me && !['dashboard', 'settings', 'accounts'].includes(tab) && <Placeholder tab={current} />}
       </main>
 
       <nav className="bottomnav">
