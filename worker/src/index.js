@@ -18,7 +18,12 @@ import { plaid, PlaidError, verifyPlaidWebhook } from './plaid.js';
 import { syncItem, runScheduledSync } from './sync.js';
 import { listAccounts, patchAccounts, putManualBalance, deleteManualBalance, monthLevels, netWorth, holdings } from './accounts.js';
 
-const WORKER_VERSION = '0.3.0';
+import {
+  listCategories, createCategory, patchCategory, listTransactions, patchTransactions, resetTransaction,
+  listRules, createRule, deleteRule, rerunCategorization, reportSummary,
+} from './transactions.js';
+
+const WORKER_VERSION = '0.4.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -83,6 +88,27 @@ async function routeApi(req, env, ctx, url, user) {
   if (path === '/api/plaid/link-token' && method === 'POST') return linkToken(req, env, url, user);
   if (path === '/api/plaid/exchange' && method === 'POST') return exchangePublicToken(req, env, user);
   if (path === '/api/items' && method === 'GET') return listItems(env, user);
+
+  // Phase 3: transactions, categories, rules, reports
+  const body = () => req.json().catch(() => ({}));
+  if (path === '/api/categories' && method === 'GET') return listCategories(env, user);
+  if (path === '/api/categories' && method === 'POST') return createCategory(env, user, await body());
+  const cm = path.match(/^\/api\/categories\/([^/]+)$/);
+  if (cm && method === 'PATCH') return patchCategory(env, user, cm[1], await body());
+  if (path === '/api/transactions' && method === 'GET') return listTransactions(env, user, url.searchParams);
+  if (path === '/api/transactions/bulk' && method === 'POST') {
+    const b = await body();
+    return patchTransactions(env, user, Array.isArray(b.ids) ? b.ids.map(String) : [], { category_id: b.category_id ?? null });
+  }
+  const tm = path.match(/^\/api\/transactions\/([^/]+)(\/reset)?$/);
+  if (tm && !tm[2] && method === 'PATCH') return patchTransactions(env, user, [tm[1]], await body());
+  if (tm && tm[2] && method === 'POST') return resetTransaction(env, user, tm[1]);
+  if (path === '/api/rules' && method === 'GET') return listRules(env, user);
+  if (path === '/api/rules' && method === 'POST') return createRule(env, user, await body());
+  const rm = path.match(/^\/api\/rules\/([^/]+)$/);
+  if (rm && method === 'DELETE') return deleteRule(env, user, rm[1]);
+  if (path === '/api/categorize/rerun' && method === 'POST') return rerunCategorization(env, user);
+  if (path === '/api/reports/summary' && method === 'GET') return reportSummary(env, user, url.searchParams);
 
   // Phase 2: accounts & net worth
   if (path === '/api/accounts' && method === 'GET') return listAccounts(env, user);

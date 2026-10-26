@@ -7,6 +7,7 @@
 import { decryptToken } from './crypto.js';
 import { plaid, PlaidError, LOGIN_REQUIRED_CODES, PRODUCT_SKIP_CODES } from './plaid.js';
 import { cents, ptDate } from './util.js';
+import { categorize } from './categorize.js';
 
 const TX_PAGE_SIZE = 250;
 
@@ -28,6 +29,10 @@ export async function syncItem(env, item, { maxPages = 3, forceSnapshot = false,
 
     if (item.tx_status !== 'unsupported') {
       Object.assign(summary, await syncTransactions(env, item, token, maxPages));
+      if (summary.added || summary.modified) {
+        const owner = await env.DB.prepare('SELECT household_id FROM users WHERE id = ?').bind(item.owner_user_id).first();
+        if (owner) await categorize(env, owner.household_id);
+      }
     }
 
     await env.DB.prepare(
