@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.5.1 -->
+<!-- Finance Pal v0.5.2 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -284,7 +284,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.5.1';
+const APP_VERSION = '0.5.2';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1297,7 +1297,7 @@ function ReportsView({ onDrill }) {
                 <span className="rep-bar"><span style={{ width: Math.max(0, g.total) / maxGroup * 100 + '%' }} /></span>
                 <span className="rep-val">{fmtCents(g.total)}</span>
               </div>
-              {g.children.length > 1 && g.children.sort((a, b) => b.total - a.total).map(c => (
+              {g.children.length > 0 && g.children.sort((a, b) => b.total - a.total).map(c => (
                 <div key={c.category_id} className="rep-row rep-child" onClick={() => onDrill({ category: c.category_id, from: range.from, to: range.to })}>
                   <span className="rep-label">{c.name}</span>
                   <span className="rep-bar"><span style={{ width: Math.max(0, c.total) / maxGroup * 100 + '%' }} /></span>
