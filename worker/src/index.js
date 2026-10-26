@@ -25,7 +25,9 @@ import {
 
 import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell } from './plan.js';
 
-const WORKER_VERSION = '0.5.1';
+import { listExpenses, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
+
+const WORKER_VERSION = '0.6.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -111,6 +113,18 @@ async function routeApi(req, env, ctx, url, user) {
   if (rm && method === 'DELETE') return deleteRule(env, user, rm[1]);
   if (path === '/api/categorize/rerun' && method === 'POST') return rerunCategorization(env, user);
   if (path === '/api/reports/summary' && method === 'GET') return reportSummary(env, user, url.searchParams);
+
+  // Expenses
+  if (path === '/api/expenses' && method === 'GET') return listExpenses(env, user);
+  if (path === '/api/expenses' && method === 'POST') return createExpense(env, user, await body());
+  if (path === '/api/expenses/import-v2' && method === 'POST') return importBudgetV2(env, user);
+  const em = path.match(/^\/api\/expenses\/([^/]+)$/);
+  if (em && method === 'PATCH') return patchExpense(env, user, em[1], await body());
+  if (em && method === 'DELETE') return deleteExpense(env, user, em[1]);
+  if (path === '/api/pools' && method === 'POST') return createPool(env, user, await body());
+  const pm = path.match(/^\/api\/pools\/([^/]+)$/);
+  if (pm && method === 'PATCH') return patchPool(env, user, pm[1], await body());
+  if (pm && method === 'DELETE') return deletePool(env, user, pm[1]);
 
   // Phase 4: plan
   if (path === '/api/plan' && method === 'GET') return getPlan(env, user, Number(url.searchParams.get('weeks')));

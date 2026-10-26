@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.5.2 -->
+<!-- Finance Pal v0.6.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -246,6 +246,25 @@ input[type=text], input[type=date], input[type=number], select {
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .form-grid input, .form-grid select { width: 100%; max-width: none; }
 
+/* Expenses */
+.exp { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.exp th { font-size: 12px; color: var(--ink-light); font-weight: 600; text-align: left; padding: 6px 4px; }
+.exp td { padding: 2px 4px; border-bottom: 1px solid var(--border); }
+.exp tr.dim td { opacity: .6; }
+.exp .cell { width: 96px; text-align: right; border: 1px solid transparent; background: transparent; padding: 6px; font-size: 14px; color: var(--ink); }
+.exp .cell-name { width: 100%; min-width: 150px; text-align: left; }
+.exp .cell:hover { border-color: var(--border); }
+.exp .cell:focus { border-color: var(--accent); background: var(--paper); outline: none; }
+.exp td.num { text-align: right; padding-right: 12px; color: var(--ink-light); white-space: nowrap; }
+.exp select { font-size: 13px; padding: 5px 8px; max-width: 170px; }
+.exp tr.adding td { background: var(--accent-light); }
+.sug td:last-child { text-align: right; }
+.sug-detail { background: var(--bg); font-size: 12.5px; color: var(--ink-light); white-space: normal !important; text-align: left !important; }
+.sug-detail span { display: inline-block; margin: 2px 12px 2px 0; }
+.neg { color: var(--red); }
+.tile-value.neg { color: var(--red); }
+@media (max-width: 767px) { .bottomnav button { font-size: 10px; } .exp .cell-name { min-width: 120px; } }
+
 /* Bottom nav (mobile) */
 .bottomnav { display: none; }
 @media (max-width: 767px) {
@@ -284,7 +303,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.5.2';
+const APP_VERSION = '0.6.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -430,6 +449,7 @@ const authErrorText = (code) => AUTH_ERROR_TEXT[code] || (code ? 'Sign-in error:
 const TABS = [
   { key: 'dashboard', label: 'Dashboard', ico: '◎', phase: 5 },
   { key: 'plan', label: 'Plan', ico: '▦', phase: 4 },
+  { key: 'expenses', label: 'Expenses', ico: '☰', phase: 4 },
   { key: 'transactions', label: 'Transactions', ico: '≡', phase: 3 },
   { key: 'reports', label: 'Reports', ico: '▤', phase: 3 },
   { key: 'accounts', label: 'Accounts', ico: '◫', phase: 2 },
@@ -1748,6 +1768,249 @@ function PlanView() {
   );
 }
 
+// ─────────────────────────────────────────────
+// EXPENSES
+// ─────────────────────────────────────────────
+// Per paycheck = monthly ÷ 4, rounded up to the dollar (on purpose: live on 4 paychecks a month).
+const perPaycheck = (monthlyCents) => Math.ceil(monthlyCents / 4 / 100) * 100;
+
+function PaidFromSelect({ value, buckets, pools, onChange }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} onClick={e => e.stopPropagation()}>
+      <option value="">Not assigned</option>
+      {pools.length > 0 && <optgroup label="Split pools">{pools.map(p => <option key={p.id} value={'pool:' + p.id}>{p.name}</option>)}</optgroup>}
+      <optgroup label="Buckets">{buckets.map(b => <option key={b.id} value={'bucket:' + b.id}>{b.name}</option>)}</optgroup>
+    </select>
+  );
+}
+
+function ExpenseRow({ e, buckets, pools, onSave, onDelete }) {
+  const [name, setName] = useState(e.name);
+  const [monthly, setMonthly] = useState(dollarsInput(e.monthly_amount));
+  useEffect(() => { setName(e.name); setMonthly(dollarsInput(e.monthly_amount)); }, [e.name, e.monthly_amount]);
+  const cents = toCents(monthly);
+  const paidFrom = e.bucket_id ? 'bucket:' + e.bucket_id : e.pool_id ? 'pool:' + e.pool_id : '';
+  const commit = (patch) => onSave(e, patch);
+  return (
+    <tr className={e.monthly_amount === 0 ? 'dim' : ''}>
+      <td><input type="text" className="cell cell-name" value={name} maxLength={60} aria-label="Expense name"
+        onChange={x => setName(x.target.value)} onBlur={() => name.trim() && name !== e.name && commit({ name })}
+        onKeyDown={x => x.key === 'Enter' && x.target.blur()} /></td>
+      <td><input type="text" inputMode="decimal" className="cell" value={monthly} placeholder="0" aria-label={e.name + ' monthly amount'}
+        onChange={x => setMonthly(x.target.value)}
+        onBlur={() => { const c = monthly.trim() === '' ? 0 : cents; if (c !== null && c !== e.monthly_amount) commit({ monthly_amount: c }); else setMonthly(dollarsInput(e.monthly_amount)); }}
+        onKeyDown={x => x.key === 'Enter' && x.target.blur()} /></td>
+      <td className="num">{fmtCents(perPaycheck(cents === null ? e.monthly_amount : (monthly.trim() === '' ? 0 : cents)))}</td>
+      <td><PaidFromSelect value={paidFrom} buckets={buckets} pools={pools} onChange={v => commit({ paid_from: v || null })} /></td>
+      <td><button className="btn-text" aria-label={'Delete ' + e.name} onClick={() => onDelete(e)}>✕</button></td>
+    </tr>
+  );
+}
+
+function PoolEditor({ pool, buckets, onSaved, onError, onCancel }) {
+  const [name, setName] = useState(pool ? pool.name : 'Credit cards');
+  const [shares, setShares] = useState(pool && pool.shares.length ? pool.shares.map(s => ({ ...s })) : [{ bucket_id: '', pct: 60 }, { bucket_id: '', pct: 40 }]);
+  const total = shares.reduce((t, s) => t + (Number(s.pct) || 0), 0);
+  async function save() {
+    try {
+      await api(pool ? '/api/pools/' + pool.id : '/api/pools', { method: pool ? 'PATCH' : 'POST', body: JSON.stringify({ name, shares: shares.filter(s => s.bucket_id) }) });
+      onSaved('Saved ' + name + '.');
+    } catch (e) { if (!(e instanceof AuthError)) onError(e.message); }
+  }
+  return (
+    <div className="editor">
+      <label>Pool name<input type="text" value={name} maxLength={40} onChange={e => setName(e.target.value)} /></label>
+      {shares.map((s, i) => (
+        <div key={i} className="btn-row">
+          <select value={s.bucket_id} onChange={e => setShares(x => x.map((y, j) => j === i ? { ...y, bucket_id: e.target.value } : y))}>
+            <option value="">Bucket…</option>{buckets.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <input type="number" min="1" max="100" value={s.pct} style={{ width: 80 }} onChange={e => setShares(x => x.map((y, j) => j === i ? { ...y, pct: e.target.value } : y))} /> %
+          <button className="btn-text" onClick={() => setShares(x => x.filter((_, j) => j !== i))}>Remove</button>
+        </div>
+      ))}
+      <div className="btn-row">
+        <button className="btn-text" onClick={() => setShares(x => x.concat({ bucket_id: '', pct: 0 }))}>+ Add bucket</button>
+        <span className={'acct-meta ' + (Math.abs(total - 100) > 0.01 ? 'neg' : 'muted')}>Total {total}%</span>
+      </div>
+      <div className="btn-row">
+        <button className="btn-primary btn-inline" disabled={!name.trim() || Math.abs(total - 100) > 0.01} onClick={save}>Save pool</button>
+        <button className="btn-text" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function ExpensesView() {
+  const [data, setData] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(null);           // group name
+  const [newExp, setNewExp] = useState({ name: '', monthly: '', paid_from: '' });
+  const [newGroup, setNewGroup] = useState('');
+  const [poolEdit, setPoolEdit] = useState(null);       // pool id or 'new'
+  const [openSug, setOpenSug] = useState(null);
+
+  const load = useCallback(async () => {
+    try { setData(await api('/api/expenses')); }
+    catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Couldn’t load expenses: ' + e.message }); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const run = async (fn, okText) => {
+    setBusy(true);
+    try { const r = await fn(); if (okText) setNotice({ kind: 'ok', text: typeof okText === 'function' ? okText(r) : okText }); await load(); return r; }
+    catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
+    finally { setBusy(false); }
+  };
+  const save = (e, patch) => run(() => api('/api/expenses/' + e.id, { method: 'PATCH', body: JSON.stringify(patch) }));
+  const del = (e) => window.confirm('Delete ' + e.name + '?') && run(() => api('/api/expenses/' + e.id, { method: 'DELETE' }), e.name + ' deleted.');
+  async function addExpense(group) {
+    const c = newExp.monthly.trim() === '' ? 0 : toCents(newExp.monthly);
+    if (!newExp.name.trim() || c === null) { setNotice({ kind: 'err', text: 'Enter a name and a monthly amount.' }); return; }
+    await run(() => api('/api/expenses', { method: 'POST', body: JSON.stringify({ name: newExp.name, group_name: group, monthly_amount: c, paid_from: newExp.paid_from || null }) }), 'Added ' + newExp.name + '.');
+    setNewExp({ name: '', monthly: '', paid_from: '' }); setAdding(null); setNewGroup('');
+  }
+
+  if (!data) return <div className="card">{notice ? <div className="error-box">{notice.text}</div> : <div className="spinner" style={{ margin: '24px auto' }} />}</div>;
+
+  const t = data.totals;
+  const groups = [...new Set(data.expenses.map(e => e.group_name))];
+  const left = t.paycheck ? t.paycheck - t.per_paycheck : null;
+  const sugs = data.suggestions.slice().sort((a, b) => b.suggested - a.suggested);
+  const bucketsById = Object.fromEntries(data.buckets.map(b => [b.id, b]));
+
+  return (
+    <>
+      <div className="tiles">
+        <div className="tile tile-hero"><div className="tile-label">Monthly expenses</div><div className="tile-value">{fmtCents(t.monthly)}</div></div>
+        <div className="tile"><div className="tile-label">Per paycheck (÷ 4)</div><div className="tile-value">{fmtCents(t.per_paycheck)}</div></div>
+        <div className="tile"><div className="tile-label">Your paycheck</div><div className="tile-value">{t.paycheck ? fmtCents(t.paycheck) : '—'}</div></div>
+        <div className="tile"><div className="tile-label">{left !== null && left < 0 ? 'Over by, per paycheck' : 'Left per paycheck'}</div>
+          <div className={'tile-value' + (left !== null && left < 0 ? ' neg' : '')}>{left !== null ? fmtCents(Math.abs(left)) : '—'}</div></div>
+        {t.paycheck && <div className="tile"><div className="tile-label">Bonus paychecks a year</div>
+          <div className="tile-value">{t.extra_paychecks_per_year} ≈ {fmtCents(t.extra_paychecks_per_year * t.paycheck)}</div></div>}
+      </div>
+      {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
+
+      {data.expenses.length === 0 && (
+        <div className="card">
+          <h1>Expenses</h1>
+          <p className="muted">List your recurring costs and where each is paid from. Finance Pal works out what each bucket needs per paycheck — monthly ÷ 4, rounded up.</p>
+          <div className="btn-row">
+            <button className="btn-primary btn-inline" disabled={busy} onClick={() => run(() => api('/api/expenses/import-v2', { method: 'POST' }),
+              r => 'Imported ' + r.created + ' expenses from Budget v2.' + (r.unmatched.length ? ' Couldn’t find a bucket for: ' + r.unmatched.join(', ') + ' — pick one in “Paid from”.' : ''))}>Import from Budget v2</button>
+            <button className="btn-secondary" onClick={() => setAdding('Other')}>Add one by hand</button>
+          </div>
+        </div>
+      )}
+
+      {sugs.length > 0 && (
+        <div className="card">
+          <h2>What each bucket needs per paycheck</h2>
+          <p className="muted acct-meta" style={{ marginTop: -6 }}>From the expenses below. Your Plan amounts stay as you set them — use <b>Use</b> to copy one over.</p>
+          <div className="table-scroll">
+            <table className="levels sug">
+              <thead><tr><th>Bucket</th><th>From expenses</th><th>In your plan</th><th>Difference</th><th /></tr></thead>
+              <tbody>{sugs.map(s => {
+                const diff = s.current - s.suggested;
+                return (
+                  <React.Fragment key={s.bucket_id}>
+                    <tr className="acct-click" onClick={() => setOpenSug(openSug === s.bucket_id ? null : s.bucket_id)}>
+                      <td>{s.name}{s.archived ? ' (archived)' : ''} <span className="muted acct-meta">{openSug === s.bucket_id ? '▾' : '▸'}</span></td>
+                      <td>{fmtCents(s.suggested)}</td>
+                      <td>{fmtCents(s.current)}</td>
+                      <td className={diff < 0 ? 'neg' : diff > 0 ? 'muted' : 'muted'}>{diff === 0 ? '✓' : (diff > 0 ? '+' : '−') + fmtCents(Math.abs(diff))}</td>
+                      <td>{diff !== 0 && !s.archived && <button className="btn-secondary" disabled={busy} onClick={ev => { ev.stopPropagation(); run(() => api('/api/buckets/' + s.bucket_id, { method: 'PATCH', body: JSON.stringify({ weekly_amount: s.suggested }) }), s.name + ' now gets ' + fmtCents(s.suggested) + ' per paycheck in your Plan.'); }}>Use {fmtCents(s.suggested)}</button>}</td>
+                    </tr>
+                    {openSug === s.bucket_id && <tr><td colSpan={5} className="sug-detail">{s.sources.map((x, i) => <span key={i}>{x.name} {fmtCents(x.amount)}</span>)}</td></tr>}
+                  </React.Fragment>
+                );
+              })}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {(data.expenses.length > 0 || adding) && (
+        <div className="card">
+          <div className="row-between">
+            <h2 style={{ margin: 0 }}>Expenses</h2>
+            {t.unassigned > 0 && <span className="pill pill-warn">{t.unassigned} not assigned to a bucket</span>}
+          </div>
+          {(groups.length ? groups : ['Other']).map(g => {
+            const list = data.expenses.filter(e => e.group_name === g);
+            const m = list.reduce((x, e) => x + e.monthly_amount, 0);
+            return (
+              <div key={g}>
+                <div className="group-head"><h2>{g}</h2><span className="sub">{fmtCents(m)}/mo · {fmtCents(list.reduce((x, e) => x + e.per_paycheck, 0))}/paycheck</span></div>
+                <div className="table-scroll">
+                  <table className="exp">
+                    <thead><tr><th>Expense</th><th>Monthly</th><th>Per paycheck</th><th>Paid from</th><th /></tr></thead>
+                    <tbody>
+                      {list.map(e => <ExpenseRow key={e.id} e={e} buckets={data.buckets} pools={data.pools} onSave={save} onDelete={del} />)}
+                      {adding === g ? (
+                        <tr className="adding">
+                          <td><input type="text" className="cell cell-name" autoFocus placeholder="Name" value={newExp.name} onChange={x => setNewExp(n => ({ ...n, name: x.target.value }))} onKeyDown={x => x.key === 'Enter' && addExpense(g)} /></td>
+                          <td><input type="text" inputMode="decimal" className="cell" placeholder="0" value={newExp.monthly} onChange={x => setNewExp(n => ({ ...n, monthly: x.target.value }))} onKeyDown={x => x.key === 'Enter' && addExpense(g)} /></td>
+                          <td className="num">{fmtCents(perPaycheck(toCents(newExp.monthly) || 0))}</td>
+                          <td><PaidFromSelect value={newExp.paid_from} buckets={data.buckets} pools={data.pools} onChange={v => setNewExp(n => ({ ...n, paid_from: v }))} /></td>
+                          <td className="btn-row" style={{ flexWrap: 'nowrap' }}><button className="btn-secondary" disabled={busy} onClick={() => addExpense(g)}>Add</button><button className="btn-text" onClick={() => setAdding(null)}>✕</button></td>
+                        </tr>
+                      ) : (
+                        <tr><td colSpan={5}><button className="btn-text" onClick={() => { setAdding(g); setNewExp({ name: '', monthly: '', paid_from: '' }); }}>+ Add to {g}</button></td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+          <div className="inline-form">
+            <label>New group<input type="text" placeholder="e.g. Kids" value={newGroup} onChange={e => setNewGroup(e.target.value)} /></label>
+            <button className="btn-text" disabled={!newGroup.trim()} onClick={() => { setAdding(newGroup.trim()); setNewExp({ name: '', monthly: '', paid_from: '' }); }}>Start group</button>
+          </div>
+          {adding && !groups.includes(adding) && groups.length > 0 && (
+            <div>
+              <div className="group-head"><h2>{adding}</h2></div>
+              <table className="exp"><tbody><tr className="adding">
+                <td><input type="text" className="cell cell-name" autoFocus placeholder="Name" value={newExp.name} onChange={x => setNewExp(n => ({ ...n, name: x.target.value }))} /></td>
+                <td><input type="text" inputMode="decimal" className="cell" placeholder="0" value={newExp.monthly} onChange={x => setNewExp(n => ({ ...n, monthly: x.target.value }))} /></td>
+                <td className="num">{fmtCents(perPaycheck(toCents(newExp.monthly) || 0))}</td>
+                <td><PaidFromSelect value={newExp.paid_from} buckets={data.buckets} pools={data.pools} onChange={v => setNewExp(n => ({ ...n, paid_from: v }))} /></td>
+                <td><button className="btn-secondary" disabled={busy} onClick={() => addExpense(adding)}>Add</button></td>
+              </tr></tbody></table>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card">
+        <div className="row-between">
+          <h2 style={{ margin: 0 }}>Split pools</h2>
+          <button className="btn-secondary" onClick={() => setPoolEdit('new')}>+ New pool</button>
+        </div>
+        <p className="muted acct-meta">A pool adds up its expenses and splits the total between buckets — like your Chase/Wells column. Each share is rounded up to the dollar.</p>
+        {poolEdit === 'new' && <PoolEditor pool={null} buckets={data.buckets} onSaved={m => { setPoolEdit(null); setNotice({ kind: 'ok', text: m }); load(); }} onError={m => setNotice({ kind: 'err', text: m })} onCancel={() => setPoolEdit(null)} />}
+        {data.pools.length === 0 && poolEdit !== 'new' && <div className="muted acct-meta">No pools yet.</div>}
+        {data.pools.map(p => (
+          <React.Fragment key={p.id}>
+            <div className="acct-row">
+              <div className="acct-main">
+                <div className="acct-name">{p.name}</div>
+                <div className="acct-meta muted">{p.shares.map(s => (bucketsById[s.bucket_id] ? bucketsById[s.bucket_id].name : 'archived bucket') + ' ' + s.pct + '%').join(' · ') || 'no buckets yet'}</div>
+              </div>
+              <div className="acct-bal"><div>{fmtCents(p.per_paycheck)}</div><div className="acct-meta muted">per paycheck</div></div>
+              <button className="btn-text" onClick={() => setPoolEdit(poolEdit === p.id ? null : p.id)}>Edit</button>
+              <button className="btn-text" onClick={() => window.confirm('Delete the ' + p.name + ' pool? Its expenses become unassigned.') && run(() => api('/api/pools/' + p.id, { method: 'DELETE' }), p.name + ' deleted.')}>Delete</button>
+            </div>
+            {poolEdit === p.id && <PoolEditor pool={p} buckets={data.buckets} onSaved={m => { setPoolEdit(null); setNotice({ kind: 'ok', text: m }); load(); }} onError={m => setNotice({ kind: 'err', text: m })} onCancel={() => setPoolEdit(null)} />}
+          </React.Fragment>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function Placeholder({ tab }) {
   return (
     <div className="card">
@@ -1867,9 +2130,10 @@ function App() {
         {me && tab === 'settings' && <><Connections onChanged={refreshMe} /><CategoriesAndRules /></>}
         {me && tab === 'accounts' && <AccountsView />}
         {me && tab === 'plan' && <PlanView />}
+        {me && tab === 'expenses' && <ExpensesView />}
         {me && tab === 'transactions' && <TransactionsView key={JSON.stringify(drill)} initialFilter={drill} />}
         {me && tab === 'reports' && <ReportsView onDrill={(f) => { setDrill(f); setTab('transactions'); window.scrollTo(0, 0); }} />}
-        {me && !['dashboard', 'settings', 'accounts', 'transactions', 'reports', 'plan'].includes(tab) && <Placeholder tab={current} />}
+        {me && !['dashboard', 'settings', 'accounts', 'transactions', 'reports', 'plan', 'expenses'].includes(tab) && <Placeholder tab={current} />}
       </main>
 
       <nav className="bottomnav">

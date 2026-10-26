@@ -85,6 +85,10 @@ From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (ap
 
 `wrangler deploy` from `worker` any time. Apply `0005_indexes.sql` (`wrangler d1 migrations apply finance-db --remote`) after the D1 daily read limit resets (midnight UTC).
 
+## v0.6.0 deploy (Expenses)
+
+From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (applies 0006, and 0005 if still pending), then `wrangler deploy`. From the repo root: commit and push.
+
 ## Conventions
 - **D1 free tier is 5M rows read/day.** Never write a query that scans all transactions per transaction (self-joins must be bounded by an indexed range), and avoid full-table passes on routine syncs.
 
