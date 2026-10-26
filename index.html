@@ -1,0 +1,330 @@
+<!-- Finance Pal v0.1.0 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Finance Pal</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-512.png">
+<meta name="theme-color" content="#174f3c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Finance Pal">
+<script src="config.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.5/babel.min.js"></script>
+<style>
+:root {
+  --bg: #f4f6f5;
+  --paper: #ffffff;
+  --ink: #1d2a24;
+  --ink-light: #5f6f67;
+  --ink-faint: #a9b5af;
+  --border: #e1e7e4;
+  --accent: #1f6f54;
+  --accent-dark: #174f3c;
+  --accent-light: #e6f2ec;
+  --gold: #b8860b;
+  --red: #c8463a;
+  --red-light: #fbeceb;
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
+  --shadow: 0 1px 3px rgba(20, 40, 30, .08);
+  --nav-h: 56px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121815; --paper: #1a221e; --ink: #e6ece9; --ink-light: #a3b0a9; --ink-faint: #5d6a63;
+    --border: #2a3530; --accent: #3fa37c; --accent-dark: #174f3c; --accent-light: #1d2f27;
+    --red: #e0675b; --red-light: #3a2220;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased; }
+button { font: inherit; cursor: pointer; }
+
+/* Top bar */
+.topbar { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; gap: 16px;
+  padding: calc(env(safe-area-inset-top) + 10px) 20px 10px; color: #fff;
+  background: linear-gradient(135deg, #174f3c 0%, #1f6f54 100%); }
+.brand { font-weight: 700; font-size: 18px; letter-spacing: .2px; white-space: nowrap; }
+.brand .ver { font-weight: 500; font-size: 11px; opacity: .7; margin-left: 6px; }
+.tabs { display: flex; gap: 4px; flex: 1; overflow-x: auto; }
+.tab { background: none; border: 0; color: rgba(255,255,255,.75); padding: 8px 12px; border-radius: var(--radius-sm); white-space: nowrap; }
+.tab:hover { background: rgba(255,255,255,.1); color: #fff; }
+.tab.active { background: rgba(255,255,255,.18); color: #fff; font-weight: 600; }
+.user { display: flex; align-items: center; gap: 10px; font-size: 13px; white-space: nowrap; }
+.btn-ghost { background: rgba(255,255,255,.14); color: #fff; border: 0; padding: 6px 12px; border-radius: var(--radius-sm); }
+.btn-ghost:hover { background: rgba(255,255,255,.24); }
+
+/* Content */
+main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 40px; }
+.card { background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow); }
+.card + .card { margin-top: 16px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+.muted { color: var(--ink-light); }
+.checklist { list-style: none; margin: 0; padding: 0; }
+.checklist li { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.checklist li:last-child { border-bottom: 0; }
+.ok { color: var(--accent); font-weight: 700; }
+.pending { color: var(--ink-faint); font-weight: 700; }
+.phase-pill { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent-light); color: var(--accent); font-weight: 600; }
+
+/* Bottom nav (mobile) */
+.bottomnav { display: none; }
+@media (max-width: 767px) {
+  .tabs, .user .email { display: none; }
+  .topbar { justify-content: space-between; }
+  main { padding: 16px 14px calc(var(--nav-h) + env(safe-area-inset-bottom) + 24px); }
+  .bottomnav { display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+    height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+    background: var(--paper); border-top: 1px solid var(--border); }
+  .bottomnav button { flex: 1; background: none; border: 0; color: var(--ink-light); font-size: 11px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+  .bottomnav button .ico { font-size: 18px; }
+  .bottomnav button.active { color: var(--accent); font-weight: 600; }
+}
+
+/* Auth overlays — always on top (same rule as LP Planner) */
+.overlay { position: fixed; inset: 0; z-index: 20000; display: grid; place-items: center; padding: 20px; background: var(--bg); }
+.signin { width: 100%; max-width: 380px; text-align: center; }
+.signin .logo { width: 72px; height: 72px; border-radius: 18px; margin: 0 auto 16px; display: block; }
+.btn-primary { width: 100%; background: var(--accent); color: #fff; border: 0; padding: 12px 16px; border-radius: var(--radius-md); font-weight: 600; font-size: 15px; }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary:disabled { opacity: .6; cursor: default; }
+.error-box { background: var(--red-light); color: var(--red); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 14px; margin-bottom: 14px; text-align: left; }
+.spinner { width: 36px; height: 36px; border-radius: 50%; border: 3px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Persistent error toast — no dismiss button; disappears only when the retry succeeds */
+.error-toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 15000;
+  display: flex; align-items: center; gap: 12px; max-width: calc(100% - 28px);
+  background: var(--ink); color: var(--paper); padding: 10px 12px 10px 16px; border-radius: var(--radius-md); box-shadow: 0 6px 24px rgba(0,0,0,.25); font-size: 14px; }
+.error-toast button { background: var(--paper); color: var(--ink); border: 0; padding: 6px 12px; border-radius: var(--radius-sm); font-weight: 600; white-space: nowrap; }
+@media (max-width: 767px) { .error-toast { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback } = React;
+const APP_VERSION = '0.1.0';
+const C = window.FP_CONFIG, K = window.FP_KEYS;
+
+// ─────────────────────────────────────────────
+// SESSION + API
+// ─────────────────────────────────────────────
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { console.warn('localStorage write failed', k, e); } }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) { console.warn('localStorage remove failed', k, e); } }
+
+const getSession = () => lsGet(K.session);
+function clearSession() { lsDel(K.session); lsDel(K.email); }
+
+class AuthError extends Error {
+  constructor(code) { super(code); this.code = code; }
+}
+
+// Every Worker call goes through here. 401/403 → AuthError (shows the sign-in wall).
+async function api(path, opts = {}) {
+  const token = getSession();
+  if (!token) throw new AuthError('unauthenticated');
+  let res;
+  try {
+    res = await fetch(C.API_URL + path, {
+      ...opts,
+      headers: { 'Authorization': 'Bearer ' + token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) },
+    });
+  } catch (e) {
+    throw new Error('Can’t reach the server. Check your connection.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 || res.status === 403) {
+    clearSession();
+    throw new AuthError(data.error || 'unauthenticated');
+  }
+  if (!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+  return data;
+}
+
+function startSignIn() {
+  const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+  const state = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  lsSet(K.oauthState, JSON.stringify({ v: state, t: Date.now() }));
+  const params = new URLSearchParams({
+    client_id: C.GOOGLE_CLIENT_ID,
+    redirect_uri: C.REDIRECT_URI,
+    response_type: 'code',
+    scope: 'openid email profile',
+    prompt: 'select_account',
+    state,
+  });
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+}
+
+const AUTH_ERROR_TEXT = {
+  not_allowed: 'That Google account isn’t allowed to use Finance Pal.',
+  unverified_email: 'That Google account’s email isn’t verified.',
+  session_expired: 'Your session expired. Please sign in again.',
+  state_mismatch: 'Sign-in didn’t complete. Please try again.',
+  access_denied: 'Sign-in was cancelled.',
+  google_exchange_failed: 'Google sign-in failed. Please try again.',
+  worker_missing_google_secret: 'Server setup incomplete: the Google client secret hasn’t been set on the Worker.',
+  network_error: 'Couldn’t reach the server during sign-in.',
+};
+const authErrorText = (code) => AUTH_ERROR_TEXT[code] || (code ? 'Sign-in error: ' + code : '');
+
+// ─────────────────────────────────────────────
+// SCREENS (placeholders until their phase)
+// ─────────────────────────────────────────────
+const TABS = [
+  { key: 'dashboard', label: 'Dashboard', ico: '◎', phase: 5 },
+  { key: 'plan', label: 'Plan', ico: '▦', phase: 4 },
+  { key: 'transactions', label: 'Transactions', ico: '≡', phase: 3 },
+  { key: 'reports', label: 'Reports', ico: '▤', phase: 3 },
+  { key: 'accounts', label: 'Accounts', ico: '◫', phase: 2 },
+  { key: 'settings', label: 'Settings', ico: '⚙', phase: 1 },
+];
+
+function SetupStatus({ me }) {
+  return (
+    <div className="card">
+      <h1>Welcome, {me.name ? me.name.split(' ')[0] : me.email}</h1>
+      <p className="muted" style={{ marginTop: 0 }}>Phase 0 checks</p>
+      <ul className="checklist">
+        <li><span className="ok">✓</span><span>Signed in as <b>{me.email}</b> ({me.role})</span></li>
+        <li><span className="ok">✓</span><span>Worker reachable — v{me.worker_version}</span></li>
+        <li><span className="ok">✓</span><span>Database connected (your user record was created)</span></li>
+        <li><span className="pending">○</span><span>Plaid environment: <b>{me.plaid_env}</b> — bank linking arrives in Phase 1</span></li>
+      </ul>
+    </div>
+  );
+}
+
+function Placeholder({ tab }) {
+  return (
+    <div className="card">
+      <h1>{tab.label}</h1>
+      <p className="muted">Coming in <span className="phase-pill">Phase {tab.phase}</span></p>
+    </div>
+  );
+}
+
+function SignInWall({ error, busy }) {
+  return (
+    <div className="overlay">
+      <div className="card signin">
+        <img className="logo" src="icon.svg" alt="" />
+        <h1>Finance Pal</h1>
+        <p className="muted" style={{ marginBottom: 20 }}>Sign in with your Google account to see your finances.</p>
+        {error && <div className="error-box">{authErrorText(error)}</div>}
+        <button className="btn-primary" onClick={startSignIn} disabled={busy}>Sign in with Google</button>
+        <p className="muted" style={{ fontSize: 12, marginTop: 14, marginBottom: 0 }}>v{APP_VERSION}</p>
+      </div>
+    </div>
+  );
+}
+
+function ErrorToast({ message, onRetry, retrying }) {
+  return (
+    <div className="error-toast" role="alert">
+      <span>{message}</span>
+      <button onClick={onRetry} disabled={retrying}>{retrying ? '↻ Retrying…' : 'Retry'}</button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// APP
+// ─────────────────────────────────────────────
+function App() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [me, setMe] = useState(null);
+  const [authError, setAuthError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [retrying, setRetrying] = useState(false);
+  const [tab, setTab] = useState('dashboard');
+
+  // Restore session. authLoading must become false on EVERY exit path.
+  const restore = useCallback(async () => {
+    const pendingError = lsGet(K.authError);
+    if (pendingError) { lsDel(K.authError); setAuthError(pendingError); }
+    if (!getSession()) { setMe(null); setAuthLoading(false); return; }
+    try {
+      const data = await api('/api/me');
+      setMe(data); setLoadError(null);
+    } catch (e) {
+      if (e instanceof AuthError) { setMe(null); setAuthError(e.code === 'unauthenticated' ? null : e.code); }
+      else { setLoadError(e.message); }
+    } finally {
+      setAuthLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { restore(); }, [restore]);
+
+  async function retry() {
+    setRetrying(true);
+    await restore();
+    setRetrying(false);
+  }
+
+  async function signOut() {
+    const token = getSession();
+    clearSession();
+    setMe(null);
+    if (token) {
+      try {
+        await fetch(C.API_URL + '/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+      } catch (e) {
+        console.warn('Logout request failed; session will expire on its own', e);
+      }
+    }
+  }
+
+  if (authLoading) return <div className="overlay"><div className="spinner" /></div>;
+  if (!me && !loadError) return <SignInWall error={authError} />;
+
+  const current = TABS.find(t => t.key === tab);
+  return (
+    <>
+      <header className="topbar">
+        <div className="brand">Finance Pal<span className="ver">v{APP_VERSION}</span></div>
+        <nav className="tabs">
+          {TABS.map(t => (
+            <button key={t.key} className={'tab' + (t.key === tab ? ' active' : '')} onClick={() => setTab(t.key)}>{t.label}</button>
+          ))}
+        </nav>
+        <div className="user">
+          {me && <span className="email">{me.email}</span>}
+          <button className="btn-ghost" onClick={signOut}>Sign out</button>
+        </div>
+      </header>
+
+      <main>
+        {me && tab === 'dashboard' && <SetupStatus me={me} />}
+        {me && tab !== 'dashboard' && <Placeholder tab={current} />}
+      </main>
+
+      <nav className="bottomnav">
+        {TABS.map(t => (
+          <button key={t.key} className={t.key === tab ? 'active' : ''} onClick={() => setTab(t.key)}>
+            <span className="ico">{t.ico}</span>{t.label === 'Transactions' ? 'Activity' : t.label}
+          </button>
+        ))}
+      </nav>
+
+      {loadError && <ErrorToast message={loadError} onRetry={retry} retrying={retrying} />}
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

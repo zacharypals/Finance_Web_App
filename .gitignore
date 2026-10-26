@@ -1,0 +1,5 @@
+# Local secrets for `wrangler dev` — never commit
+worker/.dev.vars
+worker/.wrangler/
+node_modules/
+.DS_Store

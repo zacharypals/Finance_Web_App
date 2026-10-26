@@ -1,0 +1,32 @@
+# Finance Pal — Cloudflare Worker config
+# Secrets are NOT in this file. Set them with:
+#   wrangler secret put GOOGLE_CLIENT_SECRET
+#   wrangler secret put PLAID_CLIENT_ID
+#   wrangler secret put PLAID_SECRET
+#   wrangler secret put TOKEN_ENC_KEY
+
+name = "finance-api"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://zacharypals.github.io"
+REDIRECT_URI = "https://zacharypals.github.io/Finance_Web_App/oauth.html"
+GOOGLE_CLIENT_ID = "760221993582-3nakfl51js22pij1am369v8cnhu4kr4e.apps.googleusercontent.com"
+# Comma-separated. Removing an email here locks that person out on their next request.
+ALLOWED_EMAILS = "znpals@gmail.com"
+PLAID_ENV = "sandbox"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "finance-db"
+database_id = "14545473-da80-43ec-a115-1879622f0660"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "51aceb79353e46908a9837460df8480f"
+
+# Phase 1 adds the daily sync:
+# [triggers]
+# crons = ["0 12 * * *"]   # 12:00 UTC = 5 AM Pacific (PDT)

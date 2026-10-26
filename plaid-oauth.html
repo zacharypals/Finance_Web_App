@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connecting bank…</title>
+<script src="config.js"></script>
+</head>
+<body>
+<p>Returning to Finance Pal…</p>
+<script>
+// Banks that use OAuth (Chase, Wells Fargo) send you back here after you approve
+// the connection. Phase 1 re-opens Plaid Link with this exact URL to finish linking.
+try { localStorage.setItem(window.FP_KEYS.plaidRedirect, location.href); } catch (e) {}
+location.replace('./?plaid_oauth=1');
+</script>
+</body>
+</html>
