@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.7.1 -->
+<!-- Finance Pal v0.7.2 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -310,7 +310,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.7.2';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1825,7 +1825,8 @@ function PlanView() {
   const isoShift = (iso, n) => { const x = parseIso(iso); x.setDate(x.getDate() + n); return isoDate(x); };
   const moves = day ? {
     pay_date: day,
-    items: plan.buckets.filter(b => b.kind !== 'spending' && plan.cells[b.id][day] && plan.cells[b.id][day].amount > 0).map(b => {
+    // Same order as the Buckets section and the grid (by type group, then your Name/Amount sort).
+    items: groups.flatMap(g => g.list).filter(b => b.kind !== 'spending' && plan.cells[b.id][day] && plan.cells[b.id][day].amount > 0).map(b => {
       const c = plan.cells[b.id][day];
       return { bucket_id: b.id, name: b.name, amount: c.amount, done: c.done, auto: c.auto,
         to: b.kind === 'passthrough' ? 'checking → retirement' : (b.linked_name || 'vault (not linked)') };
