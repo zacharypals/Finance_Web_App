@@ -145,6 +145,17 @@ export async function categorize(env, householdId, { reset = false, windowDays =
         WHERE category_source = 'none' AND ${scope} AND removed = 0 AND ${w.sql}`
     ).bind(r.category_id, r.category_id, r.category_id, householdId, ...w.params));
   }
+  // 1b. Moves to/from SoFi vaults ("To Mortgage Vault") are your own money changing places → Transfers.
+  //     Runs before Plaid's guess and also corrects earlier Plaid guesses; never touches manual choices.
+  if (transfersId) {
+    stmts.push(env.DB.prepare(
+      `UPDATE transactions SET category_id = ?, category_source = 'auto', is_transfer = 1, is_income = 0
+        WHERE category_source IN ('none', 'plaid') AND ${scope} AND removed = 0
+          AND date >= date('now', ?)
+          AND (LOWER(COALESCE(name, '')) LIKE '%vault%' OR LOWER(COALESCE(merchant_name, '')) LIKE '%vault%')
+          AND COALESCE((SELECT kind FROM categories c WHERE c.id = transactions.category_id), '') != 'transfer'`
+    ).bind(transfersId, householdId, reset ? '-100 years' : `-${windowDays} days`));
+  }
   // 2. Plaid detailed, then primary.
   for (const code of ['transactions.pfc_detailed', `'P:' || transactions.pfc_primary`]) {
     stmts.push(env.DB.prepare(

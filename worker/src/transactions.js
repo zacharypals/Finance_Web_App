@@ -212,7 +212,7 @@ export async function reportSummary(env, user, q) {
   const base = [user.id, user.household_id];
   const EXPENSE = `t.is_transfer = 0 AND t.is_income = 0`;
   const trendFrom = monthsBack(to, 12);
-  const [byCat, totals, months, merchants, uncategorized] = await env.DB.batch([
+  const [byCat, totals, months, merchants, uncategorized, incomeByCat] = await env.DB.batch([
     env.DB.prepare(
       `SELECT t.category_id, c.name, c.parent_id, pc.name AS parent_name, c.budget_monthly,
               SUM(t.amount) AS total, COUNT(*) AS n
@@ -240,11 +240,17 @@ export async function reportSummary(env, user, q) {
     env.DB.prepare(
       `SELECT COUNT(*) AS n ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ? AND t.category_id IS NULL`
     ).bind(...base, from, to),
+    env.DB.prepare(
+      `SELECT t.category_id, c.name, c.parent_id, pc.name AS parent_name, SUM(-t.amount) AS total, COUNT(*) AS n
+         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ? AND t.is_income = 1
+        GROUP BY t.category_id ORDER BY total DESC`
+    ).bind(...base, from, to),
   ]);
   return json({
     from, to,
     spending: totals.results[0].spending, income: totals.results[0].income,
     by_category: byCat.results, months: months.results, merchants: merchants.results,
     uncategorized: uncategorized.results[0].n,
+    income_by_category: incomeByCat.results,
   });
 }
