@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.7.0 -->
+<!-- Finance Pal v0.7.1 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -310,7 +310,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1729,6 +1729,8 @@ function BucketEditor({ b, accounts, cats, onSaved, onError, onCancel }) {
 function PlanView() {
   const [selDay, setSelDay] = useState(null);           // payday shown in Moves + highlighted column (null = this week's)
   const [past, setPast] = useState(1);                  // how many past paydays the grid shows
+  const [bucketSort, setBucketSort] = useState(() => lsGet('fp_bucket_sort') || 'name');   // name | amount (remembered on this device)
+  const chooseSort = (v) => { setBucketSort(v); lsSet('fp_bucket_sort', v); };
   const [cats] = useCategories();
   const [plan, setPlan] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -1813,7 +1815,9 @@ function PlanView() {
   );
 
   const days = plan.paydays;
-  const groups = BUCKET_KINDS.map(k => ({ ...k, list: plan.buckets.filter(b => b.kind === k.key) })).filter(g => g.list.length);
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const sorter = bucketSort === 'amount' ? (a, b) => (b.weekly_amount || 0) - (a.weekly_amount || 0) || byName(a, b) : byName;
+  const groups = BUCKET_KINDS.map(k => ({ ...k, list: plan.buckets.filter(b => b.kind === k.key).sort(sorter) })).filter(g => g.list.length);
   const current = plan.current_payday || (plan.moves || {}).pay_date;
   const day = selDay && days.some(d => d.date === selDay) ? selDay : current;
   const dayIdx = days.findIndex(d => d.date === day);
@@ -1947,7 +1951,14 @@ function PlanView() {
       <div className="card" ref={setupRef}>
         <div className="row-between">
           <h2 style={{ margin: 0 }}>Buckets</h2>
-          <button className="btn-secondary" onClick={() => setEditing('new')}>+ Add bucket</button>
+          <div className="btn-row">
+            <span className="muted acct-meta">Sort</span>
+            <div className="seg">
+              {[['name', 'Name'], ['amount', 'Amount']].map(([k, l]) =>
+                <button key={k} className={bucketSort === k ? 'active' : ''} onClick={() => chooseSort(k)}>{l}</button>)}
+            </div>
+            <button className="btn-secondary" onClick={() => setEditing('new')}>+ Add bucket</button>
+          </div>
         </div>
         {editing === 'new' && <BucketEditor b={null} accounts={accounts} cats={cats} onSaved={ok} onError={fail} onCancel={() => setEditing(null)} />}
         {groups.map(g => (
