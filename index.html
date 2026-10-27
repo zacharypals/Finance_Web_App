@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.6.2 -->
+<!-- Finance Pal v0.6.3 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -303,7 +303,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.6.2';
+const APP_VERSION = '0.6.3';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1041,6 +1041,126 @@ function Amount({ cents, transfer }) {
 
 const SOURCE_TEXT = { manual: 'set by you', rule: 'from a rule', plaid: 'from Plaid', auto: 'matched as a transfer between your accounts', none: 'not categorized' };
 
+// ─────────────────────────────────────────────
+// EXCEL EXPORT — a small .xlsx writer (no outside library: zip + SpreadsheetML)
+// ─────────────────────────────────────────────
+const _crcTable = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(bytes) { let c = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) c = _crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+// Stored (uncompressed) zip — Excel opens these fine.
+function zipFiles(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = typeof f.data === 'string' ? enc.encode(f.data) : f.data, crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+    h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true);
+    parts.push(new Uint8Array(h.buffer), name, data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true);
+    c.setUint32(42, offset, true);
+    central.push(new Uint8Array(c.buffer), name);
+    offset += 30 + name.length + data.length;
+  }
+  const size = central.reduce((t, p) => t + p.length, 0);
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, size, true); e.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(e.buffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+const xmlEsc = (s) => String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const colName = (i) => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+const excelDate = (iso) => { const [y, m, d] = iso.split('-').map(Number); return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000; };
+// Styles: 0 normal · 1 bold header · 2 date · 3 currency · 4 bold currency · 5 bold
+const XL_STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="2"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.00;[Red]\-&quot;$&quot;#,##0.00"/><numFmt numFmtId="165" formatCode="mmm d, yyyy"/></numFmts>
+<fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><name val="Arial"/></font></fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE6F2EC"/></patternFill></fill></fills>
+<borders count="2"><border/><border><top style="thin"/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="6">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="164" fontId="1" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+
+// cell: string | number | { date } | { money } | { f, s } | null ; rows[0] is the header when opts.header
+function sheetXml(rows, { widths = [], header = false, autofilter = false } = {}) {
+  const cell = (v, r, c, bold) => {
+    const ref = colName(c) + (r + 1);
+    if (v === null || v === undefined || v === '') return '';
+    if (typeof v === 'number') return `<c r="${ref}"${bold ? ' s="5"' : ''}><v>${v}</v></c>`;
+    if (typeof v === 'object' && 'date' in v) return `<c r="${ref}" s="2"><v>${excelDate(v.date)}</v></c>`;
+    if (typeof v === 'object' && 'money' in v) return `<c r="${ref}" s="${bold ? 4 : 3}"><v>${v.money}</v></c>`;
+    if (typeof v === 'object' && 'f' in v) return `<c r="${ref}" s="${v.s || 0}"><f>${xmlEsc(v.f)}</f></c>`;
+    return `<c r="${ref}" t="inlineStr"${r === 0 && header ? ' s="1"' : bold ? ' s="5"' : ''}><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`;
+  };
+  const body = rows.map((row, r) => `<row r="${r + 1}">${row.map((v, c) => cell(v, r, c, row.bold)).join('')}</row>`).join('');
+  const lastCol = colName(Math.max(1, ...rows.map(r => r.length)) - 1);
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheetViews><sheetView workbookViewId="0">${header ? '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' : ''}</sheetView></sheetViews>
+<sheetFormatPr defaultRowHeight="15"/>
+${widths.length ? '<cols>' + widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('') + '</cols>' : ''}
+<sheetData>${body}</sheetData>
+${autofilter ? `<autoFilter ref="A1:${lastCol}${autofilter}"/>` : ''}
+</worksheet>`;
+}
+
+function buildXlsx(sheets) {
+  const ws = sheets.map((s, i) => `<sheet name="${xmlEsc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('');
+  const rels = sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('');
+  const defined = sheets.map((s, i) => s.autofilter ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${xmlEsc(s.name)}'!$A$1:$${colName(s.cols - 1)}$${s.autofilter}</definedName>` : '').join('');
+  return zipFiles([
+    { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>` },
+    { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: 'xl/workbook.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${ws}</sheets>${defined ? '<definedNames>' + defined + '</definedNames>' : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { name: 'xl/styles.xml', data: XL_STYLES },
+    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: s.xml })),
+  ]);
+}
+
+// Amount convention in the file: money out is negative, money in is positive (like a bank statement).
+function buildTransactionsXlsx(txns, filters) {
+  const header = ['Date', 'Description', 'Bank description', 'Account', 'Group', 'Category', 'Amount', 'Transfer', 'Pending', 'Notes'];
+  const rows = [header];
+  for (const t of txns) {
+    rows.push([
+      { date: t.date }, t.merchant_name || t.name || '', t.name || '',
+      (t.account_name || '') + (t.account_mask ? ' ••' + t.account_mask : ''),
+      t.category_group || '', t.category_name || 'Uncategorized',
+      { money: -t.amount / 100 }, t.is_transfer ? 'Yes' : '', t.pending ? 'Yes' : '', t.notes || '',
+    ]);
+  }
+  const last = rows.length;
+  const totals = ['Total', txns.length + ' transactions', '', '', '', '', { f: `SUM(G2:G${last})`, s: 4 }];
+  totals.bold = true;
+  rows.push([], totals);
+  const filterRows = [['Filter', 'Value'], ...filters.map(([k, v]) => [k, v])];
+  return buildXlsx([
+    { name: 'Transactions', cols: header.length, autofilter: last, xml: sheetXml(rows, { header: true, autofilter: last, widths: [13, 30, 38, 24, 16, 20, 13, 9, 9, 30] }) },
+    { name: 'Filters', xml: sheetXml(filterRows, { header: true, widths: [16, 40] }) },
+  ]);
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 function TransactionsView({ initialFilter }) {
   const [cats, reloadCats] = useCategories();
   const [accounts, setAccounts] = useState([]);
@@ -1065,8 +1185,8 @@ function TransactionsView({ initialFilter }) {
   useEffect(() => { api('/api/accounts').then(r => setAccounts(r.accounts.filter(a => !a.hidden))).catch(e => { if (!(e instanceof AuthError)) console.warn(e); }); }, []);
   useEffect(() => { const t = setTimeout(() => setQ(search.trim()), 300); return () => clearTimeout(t); }, [search]);
 
-  const query = useCallback((offset) => {
-    const p = new URLSearchParams({ from: range.from, to: range.to, limit: '100', offset: String(offset) });
+  const query = useCallback((offset, limit = 100) => {
+    const p = new URLSearchParams({ from: range.from, to: range.to, limit: String(limit), offset: String(offset) });
     if (account) p.set('account', account);
     if (category) p.set('category', category);
     if (q) p.set('q', q);
@@ -1119,6 +1239,35 @@ function TransactionsView({ initialFilter }) {
     } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
   }
 
+  const [exporting, setExporting] = useState(false);
+  async function exportExcel() {
+    setExporting(true); setNotice(null);
+    try {
+      // Every row matching the current filters, not just what's been loaded on screen.
+      let all = [], total = Infinity, guard = 0;
+      while (all.length < total && guard++ < 200) {
+        const r = await query(all.length, 500);
+        total = r.total;
+        if (!r.transactions.length) break;
+        all = all.concat(r.transactions);
+      }
+      const acctLabel = account ? (accounts.find(a => a.id === account) || {}) : null;
+      const catLabel = !category ? 'All categories' : category === 'uncategorized' ? 'Uncategorized'
+        : ((cats.find(c => c.id === category) || {}).parent_id ? '' : 'All ') + ((cats.find(c => c.id === category) || {}).name || category);
+      const filters = [
+        ['From', { date: range.from }], ['To', { date: range.to }],
+        ['Account', acctLabel ? acctName(acctLabel) + (acctLabel.mask ? ' ••' + acctLabel.mask : '') : 'All accounts'],
+        ['Category', catLabel], ['Search', q || '(none)'], ['Transfers', hideTransfers ? 'Hidden' : 'Included'],
+        ['Transactions', all.length], ['Exported', new Date().toLocaleString('en-US')],
+      ];
+      const blob = buildTransactionsXlsx(all, filters);
+      downloadBlob(blob, 'Finance Pal transactions ' + range.from + ' to ' + range.to + '.xlsx');
+      setNotice({ kind: 'ok', text: 'Exported ' + all.length + ' transaction' + (all.length === 1 ? '' : 's') + ' to Excel.' });
+    } catch (e) {
+      if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Export failed: ' + e.message });
+    } finally { setExporting(false); }
+  }
+
   const toggleSel = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   let lastDate = null;
 
@@ -1126,7 +1275,10 @@ function TransactionsView({ initialFilter }) {
     <div className="card">
       <div className="row-between">
         <h1 style={{ margin: 0 }}>Transactions</h1>
-        <button className="btn-secondary" onClick={() => { setSelecting(v => !v); setSelected(new Set()); setOpen(null); }}>{selecting ? 'Done' : 'Select'}</button>
+        <div className="btn-row">
+          <button className="btn-secondary" disabled={exporting || !data || !data.total} onClick={exportExcel} title="Download everything matching these filters as an Excel file">{exporting ? 'Exporting…' : '⤓ Export to Excel'}</button>
+          <button className="btn-secondary" onClick={() => { setSelecting(v => !v); setSelected(new Set()); setOpen(null); }}>{selecting ? 'Done' : 'Select'}</button>
+        </div>
       </div>
 
       <div className="filters">
