@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.6.3 -->
+<!-- Finance Pal v0.7.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -246,6 +246,13 @@ input[type=text], input[type=date], input[type=number], select {
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .form-grid input, .form-grid select { width: 100%; max-width: none; }
 
+/* Plan week picker */
+.period-nav .btn-text:hover:not(:disabled) { color: var(--accent); }
+.plan th.pickable { cursor: pointer; }
+.plan th.pickable:hover { color: var(--accent); }
+.plan .this-week { display: block; font-size: 10px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .3px; }
+.plan tfoot .asof { font-weight: 400; }
+
 /* Expenses */
 .exp { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
 .exp th { font-size: 12px; color: var(--ink-light); font-weight: 600; text-align: left; padding: 6px 4px; }
@@ -303,7 +310,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.6.3';
+const APP_VERSION = '0.7.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1720,6 +1727,8 @@ function BucketEditor({ b, accounts, cats, onSaved, onError, onCancel }) {
 }
 
 function PlanView() {
+  const [selDay, setSelDay] = useState(null);           // payday shown in Moves + highlighted column (null = this week's)
+  const [past, setPast] = useState(1);                  // how many past paydays the grid shows
   const [cats] = useCategories();
   const [plan, setPlan] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -1733,11 +1742,11 @@ function PlanView() {
 
   const load = useCallback(async () => {
     try {
-      const [p, a] = await Promise.all([api('/api/plan?weeks=8'), api('/api/accounts')]);
+      const [p, a] = await Promise.all([api('/api/plan?weeks=8&past=' + past), api('/api/accounts')]);
       setPlan(p); setAccounts(a.accounts);
       if (p.template) setTpl({ cadence: p.template.cadence, anchor_date: p.template.anchor_date, expected: dollarsInput(p.template.expected_total) });
     } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Couldn’t load your plan: ' + e.message }); }
-  }, []);
+  }, [past]);
   useEffect(() => { load(); }, [load]);
   const ok = (text) => { setNotice({ kind: 'ok', text }); setEditing(null); load(); };
   const fail = (text) => setNotice({ kind: 'err', text });
@@ -1758,8 +1767,19 @@ function PlanView() {
     try { await api('/api/plan/cell', { method: 'PUT', body: JSON.stringify({ pay_date: d, bucket_id: b.id, amount }) }); load(); }
     catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
   }
+  async function savePaycheck(d, text) {
+    const key = 'pay|' + d.date;
+    setDraft(x => { const n = { ...x }; delete n[key]; return n; });
+    const t = (text || '').trim();
+    const cents = t === '' ? null : toCents(t);
+    if (t !== '' && cents === null) { fail('“' + text + '” isn’t an amount.'); return; }
+    // Typing the normal amount back in (or clearing) returns the week to normal.
+    const amount = cents === null || cents === (d.actual || d.expected) ? null : cents;
+    try { await api('/api/plan/paycheck', { method: 'PUT', body: JSON.stringify({ pay_date: d.date, amount }) }); load(); }
+    catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+  }
   async function toggleMove(m, done) {
-    try { await api('/api/plan/cell', { method: 'PUT', body: JSON.stringify({ pay_date: plan.moves.pay_date, bucket_id: m.bucket_id, done }) }); load(); }
+    try { await api('/api/plan/cell', { method: 'PUT', body: JSON.stringify({ pay_date: day, bucket_id: m.bucket_id, done }) }); load(); }
     catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
   }
   async function saveTemplate() {
@@ -1794,19 +1814,44 @@ function PlanView() {
 
   const days = plan.paydays;
   const groups = BUCKET_KINDS.map(k => ({ ...k, list: plan.buckets.filter(b => b.kind === k.key) })).filter(g => g.list.length);
-  const moves = plan.moves;
+  const current = plan.current_payday || (plan.moves || {}).pay_date;
+  const day = selDay && days.some(d => d.date === selDay) ? selDay : current;
+  const dayIdx = days.findIndex(d => d.date === day);
+  const step = plan.template && plan.template.cadence === 'biweekly' ? 14 : 7;
+  const isoShift = (iso, n) => { const x = parseIso(iso); x.setDate(x.getDate() + n); return isoDate(x); };
+  const moves = day ? {
+    pay_date: day,
+    items: plan.buckets.filter(b => b.kind !== 'spending' && plan.cells[b.id][day] && plan.cells[b.id][day].amount > 0).map(b => {
+      const c = plan.cells[b.id][day];
+      return { bucket_id: b.id, name: b.name, amount: c.amount, done: c.done, auto: c.auto,
+        to: b.kind === 'passthrough' ? 'checking → retirement' : (b.linked_name || 'vault (not linked)') };
+    }),
+  } : null;
   const pending = moves ? moves.items.filter(m => !m.done && !m.auto) : [];
+  const goPrev = () => {
+    const target = isoShift(day, -step);
+    if (dayIdx <= 0) setPast(p => p + 4);          // load four more past weeks, then land on the previous one
+    setSelDay(target);
+  };
+  const goNext = () => dayIdx < days.length - 1 && setSelDay(days[dayIdx + 1].date);
+  const whenLabel = day === current ? 'this paycheck' : day < current ? 'past paycheck' : 'upcoming paycheck';
 
   return (
     <>
       {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
 
-      {moves && moves.items.length > 0 && (
+      {moves && (
         <div className="card">
           <div className="row-between">
-            <h2 style={{ margin: 0 }}>Moves for the {shortDate(moves.pay_date)} paycheck</h2>
-            <span className={'pill ' + (pending.length ? 'pill-warn' : 'pill-ok')}>{pending.length ? pending.length + ' to do' : '✓ All done'}</span>
+            <div className="period-nav">
+              <button className="btn-text" aria-label="Previous paycheck" onClick={goPrev}>‹</button>
+              <div><h2 style={{ margin: 0 }}>Moves for the {shortDate(moves.pay_date)} paycheck</h2>
+                <span className="muted acct-meta">{whenLabel}{day !== current && <> · <button className="linkish acct-meta" onClick={() => setSelDay(null)}>back to this week</button></>}</span></div>
+              <button className="btn-text" aria-label="Next paycheck" disabled={dayIdx >= days.length - 1} onClick={goNext}>›</button>
+            </div>
+            {moves.items.length > 0 && <span className={'pill ' + (pending.length ? 'pill-warn' : 'pill-ok')}>{pending.length ? pending.length + ' to do' : '✓ All done'}</span>}
           </div>
+          {moves.items.length === 0 && <div className="muted acct-meta" style={{ marginTop: 10 }}>Nothing planned to move for this paycheck.</div>}
           <div className="moves">
             {moves.items.map(m => (
               <label key={m.bucket_id} className={'move' + (m.done || m.auto ? ' move-done' : '')}>
@@ -1846,7 +1891,8 @@ function PlanView() {
           <table className="plan">
             <thead><tr>
               <th className="sticky">Bucket</th><th>Now</th>
-              {days.map(d => <th key={d.date} className={(d.is_current ? 'cur ' : '') + (d.date < (plan.moves || {}).pay_date ? 'past' : '')}>{shortDate(d.date)}</th>)}
+              {days.map(d => <th key={d.date} className={(d.date === day ? 'cur ' : '') + (d.date < current ? 'past ' : '') + 'pickable'}
+                title="Show this paycheck’s moves" onClick={() => setSelDay(d.date)}>{shortDate(d.date)}{d.is_current && <span className="this-week">this week</span>}</th>)}
             </tr></thead>
             {groups.map(g => (
               <tbody key={g.key}>
@@ -1862,7 +1908,7 @@ function PlanView() {
                       const key = b.id + '|' + d.date;
                       const val = key in draft ? draft[key] : (c.amount ? dollarsInput(c.amount) : '');
                       return (
-                        <td key={d.date} className={(d.is_current ? 'cur ' : '') + (c.done || c.auto ? 'done' : '')}>
+                        <td key={d.date} className={(d.date === day ? 'cur ' : '') + (c.done || c.auto ? 'done' : '')}>
                           <input className={'cell' + (c.override ? ' override' : '')} inputMode="decimal" value={val} placeholder="0"
                             aria-label={b.name + ' on ' + shortDate(d.date)}
                             onChange={e => setDraft(x => ({ ...x, [key]: e.target.value }))}
@@ -1876,10 +1922,23 @@ function PlanView() {
               </tbody>
             ))}
             <tfoot>
-              <tr><td className="sticky">Paycheck</td><td />{days.map(d => <td key={d.date} className={d.is_current ? 'cur' : ''}>
-                {d.actual ? <span title="Seen in your accounts">{fmtCents(d.actual)} ✓</span> : <span className="muted">{d.expected ? fmtCents(d.expected) : '—'}</span>}</td>)}</tr>
-              <tr><td className="sticky">Allocated</td><td />{days.map(d => <td key={d.date} className={d.is_current ? 'cur' : ''}>{fmtCents(d.allocated)}</td>)}</tr>
-              <tr className="left"><td className="sticky">Left over</td><td />{days.map(d => <td key={d.date} className={(d.is_current ? 'cur ' : '') + (d.left < 0 ? 'neg' : '')}>{d.expected || d.actual ? fmtCents(d.left) : '—'}</td>)}</tr>
+              <tr><td className="sticky">Paycheck<span className="asof">type over a week for a bonus or reimbursement</span></td><td />{days.map(d => {
+                const key = 'pay|' + d.date;
+                const base = d.actual || d.expected;
+                const val = key in draft ? draft[key] : (d.override !== null && d.override !== undefined ? dollarsInput(d.override) : '');
+                return (
+                  <td key={d.date} className={d.date === day ? 'cur' : ''}>
+                    <input className={'cell' + (d.override !== null && d.override !== undefined ? ' override' : '')} inputMode="decimal" value={val}
+                      placeholder={base ? dollarsInput(base) : '0'} aria-label={'Paycheck on ' + shortDate(d.date)}
+                      onChange={e => setDraft(x => ({ ...x, [key]: e.target.value }))}
+                      onBlur={() => key in draft && savePaycheck(d, draft[key])}
+                      onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setDraft(x => { const n = { ...x }; delete n[key]; return n; }); }} />
+                    {d.actual && <span className="asof" title="Deposits seen in your accounts">✓ seen {fmtCents(d.actual)}</span>}
+                  </td>
+                );
+              })}</tr>
+              <tr><td className="sticky">Allocated</td><td />{days.map(d => <td key={d.date} className={d.date === day ? 'cur' : ''}>{fmtCents(d.allocated)}</td>)}</tr>
+              <tr className="left"><td className="sticky">Left over</td><td />{days.map(d => <td key={d.date} className={(d.date === day ? 'cur ' : '') + (d.left < 0 ? 'neg' : '')}>{d.income ? fmtCents(d.left) : '—'}</td>)}</tr>
             </tfoot>
           </table>
         </div>

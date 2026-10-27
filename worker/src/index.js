@@ -23,11 +23,11 @@ import {
   listRules, createRule, deleteRule, rerunCategorization, reportSummary,
 } from './transactions.js';
 
-import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell } from './plan.js';
+import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell, putPaycheck } from './plan.js';
 
 import { listExpenses, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
 
-const WORKER_VERSION = '0.6.2';
+const WORKER_VERSION = '0.7.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -127,7 +127,8 @@ async function routeApi(req, env, ctx, url, user) {
   if (pm && method === 'DELETE') return deletePool(env, user, pm[1]);
 
   // Phase 4: plan
-  if (path === '/api/plan' && method === 'GET') return getPlan(env, user, Number(url.searchParams.get('weeks')));
+  if (path === '/api/plan' && method === 'GET') return getPlan(env, user, Number(url.searchParams.get('weeks')), Number(url.searchParams.get('past')));
+  if (path === '/api/plan/paycheck' && method === 'PUT') return putPaycheck(env, user, await body());
   if (path === '/api/plan/template' && method === 'PUT') return putTemplate(env, user, await body());
   if (path === '/api/plan/cell' && method === 'PUT') return putCell(env, user, await body());
   if (path === '/api/buckets' && method === 'POST') return createBucket(env, user, await body());

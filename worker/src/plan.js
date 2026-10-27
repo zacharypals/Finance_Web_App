@@ -26,13 +26,13 @@ const prevMonthly = (day, dueIso) => { const [y, m] = dueIso.split('-').map(Numb
 const addMonth = (iso) => { const [y, m, d] = iso.split('-').map(Number); return monthDate(y, m + 1, d); };
 
 // Paydays: one before the most recent, through `count` upcoming.
-export function paydays(template, today, count) {
+export function paydays(template, today, count, past = 1) {
   const step = template.cadence === 'biweekly' ? 14 : 7;
   const diff = Math.floor((toMs(today) - toMs(template.anchor_date)) / 86400000);
   const k = Math.floor(diff / step);
   const last = addDays(template.anchor_date, k * step);   // most recent payday <= today
   const out = [];
-  for (let i = -1; i < count; i++) out.push(addDays(last, i * step));
+  for (let i = -past; i < count; i++) out.push(addDays(last, i * step));
   return { list: out, last, step };
 }
 
@@ -241,8 +241,24 @@ export async function putCell(env, user, body) {
   return json({ ok: true });
 }
 
+// One week's paycheck amount (bonus, reimbursement…). amount = null goes back to normal.
+export async function putPaycheck(env, user, body) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(body.pay_date || '')) return json({ error: 'bad_request', message: 'Bad date.' }, 400);
+  const amount = centsOrNull(body.amount);
+  if (Number.isNaN(amount)) return json({ error: 'bad_request', message: 'Amount is invalid.' }, 400);
+  if (amount === null) {
+    await env.DB.prepare('DELETE FROM paychecks WHERE user_id = ? AND pay_date = ?').bind(user.id, body.pay_date).run();
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO paychecks (id, user_id, pay_date, expected_total, status) VALUES (?, ?, ?, ?, 'projected')
+       ON CONFLICT(user_id, pay_date) DO UPDATE SET expected_total = excluded.expected_total`
+    ).bind(crypto.randomUUID(), user.id, body.pay_date, amount).run();
+  }
+  return json({ ok: true });
+}
+
 // ── The plan ───────────────────────────────────────────
-export async function getPlan(env, user, weeks) {
+export async function getPlan(env, user, weeks, pastWeeks) {
   const today = ptDate();
   const template = await getTemplate(env, user, false);
   const buckets = (await env.DB.prepare(
@@ -269,7 +285,8 @@ export async function getPlan(env, user, weeks) {
   if (!template) return json({ template: null, buckets, archived, paydays: [], cells: {}, funding: [], moves: null, today });
 
   const count = Math.min(Math.max(weeks || 8, 2), 26);
-  const { list: days, last } = paydays(template, today, count);
+  const past = Math.min(Math.max(pastWeeks || 1, 1), 52);
+  const { list: days, last } = paydays(template, today, count, past);
   const first = days[0];
   const lastDay = days[days.length - 1];
 
@@ -277,7 +294,8 @@ export async function getPlan(env, user, weeks) {
   const linkedIds = buckets.map((b) => b.linked_account_id).filter(Boolean);
   const catIds = buckets.map((b) => b.category_id).filter(Boolean);
   const ph = (n) => Array(n).fill('?').join(',') || 'NULL';
-  const [cellsRes, payRes, vaultInRes, spendRes] = await env.DB.batch([
+  const [cellsRes, payRes, vaultInRes, spendRes, overrideRes] = await env.DB.batch([
+    // (index 4, below) per-week paycheck amounts you typed in — bonuses, reimbursements
     env.DB.prepare('SELECT pay_date, bucket_id, amount, done FROM plan_cells WHERE user_id = ? AND pay_date >= ? AND pay_date <= ?')
       .bind(user.id, addDays(first, -60), lastDay),
     env.DB.prepare(
@@ -296,6 +314,8 @@ export async function getPlan(env, user, weeks) {
           AND t.account_id IN (SELECT a.id FROM accounts a JOIN users ow ON ow.id = a.owner_user_id WHERE ow.household_id = ?)
         GROUP BY t.category_id`
     ).bind(...catIds, monthStart, user.household_id),
+    env.DB.prepare('SELECT pay_date, expected_total FROM paychecks WHERE user_id = ? AND pay_date >= ? AND pay_date <= ? AND expected_total IS NOT NULL')
+      .bind(user.id, first, lastDay),
   ]);
 
   // cells[bucket][date] = { amount, override, done, auto }
@@ -315,11 +335,14 @@ export async function getPlan(env, user, weeks) {
   }
 
   // Paycheck rows: expected vs what actually arrived (Thursday-evening deposits count for Friday paydays).
+  // Income for each payday: your typed-in amount for that week, else what actually arrived, else the usual amount.
+  const payOverrides = new Map(overrideRes.results.map((r) => [r.pay_date, r.expected_total]));
   const pays = days.map((d) => {
     const actual = payRes.results.filter((p) => p.date >= addDays(d, -2) && p.date <= addDays(d, 1)).reduce((s, p) => s + p.amount, 0);
     const allocated = buckets.reduce((s, b) => s + cells[b.id][d].amount, 0);
-    const income = actual || template.expected_total || 0;
-    return { date: d, expected: template.expected_total, actual: actual || null, allocated, left: income - allocated, is_past: d <= today, is_current: d === last };
+    const override = payOverrides.has(d) ? payOverrides.get(d) : null;
+    const income = override ?? (actual || template.expected_total || 0);
+    return { date: d, expected: template.expected_total, actual: actual || null, override, income, allocated, left: income - allocated, is_past: d <= today, is_current: d === last };
   });
 
   // Funding for bills and cards.
@@ -374,5 +397,5 @@ export async function getPlan(env, user, weeks) {
     })),
   };
 
-  return json({ template, buckets, archived, paydays: pays, cells, funding, moves, today });
+  return json({ template, buckets, archived, paydays: pays, cells, funding, moves, today, current_payday: last, past });
 }
