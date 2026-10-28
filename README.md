@@ -89,6 +89,10 @@ From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (ap
 
 From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (applies 0006, and 0005 if still pending), then `wrangler deploy`. From the repo root: commit and push.
 
+## v0.8.0 deploy (count purchases on the day charged)
+
+From the `worker` folder: `wrangler d1 migrations apply finance-db --remote` (applies 0007), then `wrangler deploy`. From the repo root: commit and push.
+
 ## Conventions
 - **D1 free tier is 5M rows read/day.** Never write a query that scans all transactions per transaction (self-joins must be bounded by an indexed range), and avoid full-table passes on routine syncs.
 

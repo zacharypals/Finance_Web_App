@@ -63,8 +63,8 @@ export async function listTransactions(env, user, q) {
   const where = [TX_VISIBLE];
   const params = [user.id, user.household_id];
   const from = q.get('from'), to = q.get('to');
-  if (from && DATE_RE.test(from)) { where.push('t.date >= ?'); params.push(from); }
-  if (to && DATE_RE.test(to)) { where.push('t.date <= ?'); params.push(to); }
+  if (from && DATE_RE.test(from)) { where.push('t.eff_date >= ?'); params.push(from); }
+  if (to && DATE_RE.test(to)) { where.push('t.eff_date <= ?'); params.push(to); }
   if (q.get('account')) { where.push('t.account_id = ?'); params.push(q.get('account')); }
   const cat = q.get('category');
   if (cat === 'uncategorized') where.push('t.category_id IS NULL');
@@ -80,12 +80,12 @@ export async function listTransactions(env, user, q) {
   const W = where.join(' AND ');
   const [rows, agg] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT t.id, t.date, t.authorized_date, t.amount, t.merchant_name, t.name, t.pending, t.notes,
+      `SELECT t.id, t.date, t.eff_date, t.authorized_date, t.amount, t.merchant_name, t.name, t.pending, t.notes,
               t.category_id, t.category_source, t.is_transfer, t.is_income, t.pfc_primary, t.pfc_detailed,
               t.account_id, COALESCE(a.display_name, a.name) AS account_name, a.mask AS account_mask,
               c.name AS category_name, c.kind AS category_kind, pc.name AS category_group
          ${TX_FROM} WHERE ${W}
-        ORDER BY t.date DESC, t.pending DESC, t.id LIMIT ? OFFSET ?`
+        ORDER BY t.eff_date DESC, t.pending DESC, t.date DESC, t.id LIMIT ? OFFSET ?`
     ).bind(...params, limit, offset),
     env.DB.prepare(
       `SELECT COUNT(*) AS n,
@@ -216,33 +216,33 @@ export async function reportSummary(env, user, q) {
     env.DB.prepare(
       `SELECT t.category_id, c.name, c.parent_id, pc.name AS parent_name, c.budget_monthly,
               SUM(t.amount) AS total, COUNT(*) AS n
-         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ? AND ${EXPENSE}
+         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ? AND ${EXPENSE}
         GROUP BY t.category_id ORDER BY total DESC`
     ).bind(...base, from, to),
     env.DB.prepare(
       `SELECT COALESCE(SUM(CASE WHEN ${EXPENSE} THEN t.amount ELSE 0 END), 0) AS spending,
               COALESCE(SUM(CASE WHEN t.is_income = 1 THEN -t.amount ELSE 0 END), 0) AS income,
               COALESCE(SUM(CASE WHEN t.is_transfer = 1 THEN 1 ELSE 0 END), 0) AS transfers
-         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ?`
+         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ?`
     ).bind(...base, from, to),
     env.DB.prepare(
-      `SELECT substr(t.date, 1, 7) AS month,
+      `SELECT substr(t.eff_date, 1, 7) AS month,
               COALESCE(SUM(CASE WHEN ${EXPENSE} THEN t.amount ELSE 0 END), 0) AS spending,
               COALESCE(SUM(CASE WHEN t.is_income = 1 THEN -t.amount ELSE 0 END), 0) AS income
-         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ?
+         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ?
         GROUP BY month ORDER BY month`
     ).bind(...base, trendFrom, to),
     env.DB.prepare(
       `SELECT COALESCE(t.merchant_name, t.name) AS merchant, SUM(t.amount) AS total, COUNT(*) AS n
-         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ? AND ${EXPENSE}
+         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ? AND ${EXPENSE}
         GROUP BY merchant HAVING total > 0 ORDER BY total DESC LIMIT 10`
     ).bind(...base, from, to),
     env.DB.prepare(
-      `SELECT COUNT(*) AS n ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ? AND t.category_id IS NULL`
+      `SELECT COUNT(*) AS n ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ? AND t.category_id IS NULL`
     ).bind(...base, from, to),
     env.DB.prepare(
       `SELECT t.category_id, c.name, c.parent_id, pc.name AS parent_name, SUM(-t.amount) AS total, COUNT(*) AS n
-         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.date >= ? AND t.date <= ? AND t.is_income = 1
+         ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ? AND t.is_income = 1
         GROUP BY t.category_id ORDER BY total DESC`
     ).bind(...base, from, to),
   ]);

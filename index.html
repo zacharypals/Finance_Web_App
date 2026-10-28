@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.7.2 -->
+<!-- Finance Pal v0.8.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -310,7 +310,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.7.2';
+const APP_VERSION = '0.8.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1046,6 +1046,9 @@ function Amount({ cents, transfer }) {
   return <span className={'amt' + (inflow ? ' amt-in' : '') + (transfer ? ' amt-xfer' : '')}>{inflow ? '+' : ''}{fmtCents(Math.abs(cents))}</span>;
 }
 
+// The day a purchase counts toward: when the card was run, else when it posted.
+const txDay = (t) => t.eff_date || t.date;
+
 const SOURCE_TEXT = { manual: 'set by you', rule: 'from a rule', plaid: 'from Plaid', auto: 'matched as a transfer between your accounts', none: 'not categorized' };
 
 // ─────────────────────────────────────────────
@@ -1139,14 +1142,14 @@ function buildXlsx(sheets) {
 
 // Amount convention in the file: money out is negative, money in is positive (like a bank statement).
 function buildTransactionsXlsx(txns, filters) {
-  const header = ['Date', 'Description', 'Bank description', 'Account', 'Group', 'Category', 'Amount', 'Transfer', 'Pending', 'Notes'];
+  const header = ['Date', 'Description', 'Bank description', 'Account', 'Group', 'Category', 'Amount', 'Transfer', 'Pending', 'Notes', 'Posted'];
   const rows = [header];
   for (const t of txns) {
     rows.push([
-      { date: t.date }, t.merchant_name || t.name || '', t.name || '',
+      { date: txDay(t) }, t.merchant_name || t.name || '', t.name || '',
       (t.account_name || '') + (t.account_mask ? ' ••' + t.account_mask : ''),
       t.category_group || '', t.category_name || 'Uncategorized',
-      { money: -t.amount / 100 }, t.is_transfer ? 'Yes' : '', t.pending ? 'Yes' : '', t.notes || '',
+      { money: -t.amount / 100 }, t.is_transfer ? 'Yes' : '', t.pending ? 'Yes' : '', t.notes || '', { date: t.date },
     ]);
   }
   const last = rows.length;
@@ -1155,7 +1158,7 @@ function buildTransactionsXlsx(txns, filters) {
   rows.push([], totals);
   const filterRows = [['Filter', 'Value'], ...filters.map(([k, v]) => [k, v])];
   return buildXlsx([
-    { name: 'Transactions', cols: header.length, autofilter: last, xml: sheetXml(rows, { header: true, autofilter: last, widths: [13, 30, 38, 24, 16, 20, 13, 9, 9, 30] }) },
+    { name: 'Transactions', cols: header.length, autofilter: last, xml: sheetXml(rows, { header: true, autofilter: last, widths: [13, 30, 38, 24, 16, 20, 13, 9, 9, 30, 13] }) },
     { name: 'Filters', xml: sheetXml(filterRows, { header: true, widths: [16, 40] }) },
   ]);
 }
@@ -1334,10 +1337,10 @@ function TransactionsView({ initialFilter }) {
       {data && rows.length === 0 && <div className="empty-note">No transactions match these filters.</div>}
       <div className="tx-list">
         {rows.map(t => {
-          const head = t.date !== lastDate ? (lastDate = t.date) : null;
+          const head = txDay(t) !== lastDate ? (lastDate = txDay(t)) : null;
           return (
             <React.Fragment key={t.id}>
-              {head && <div className="tx-date">{parseIso(t.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>}
+              {head && <div className="tx-date">{parseIso(txDay(t)).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>}
               <div className={'tx-row' + (t.is_transfer ? ' dim' : '')} onClick={() => selecting ? toggleSel(t.id) : setOpen(open === t.id ? null : t.id)}>
                 {selecting && <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSel(t.id)} onClick={e => e.stopPropagation()} />}
                 <div className="tx-main">
@@ -1381,7 +1384,7 @@ function TxDetail({ t, onSaved, onError }) {
   return (
     <div className="editor" onClick={e => e.stopPropagation()}>
       <div className="acct-meta muted">
-        {t.name}{t.merchant_name && t.merchant_name !== t.name ? '' : ''} · {fmtDate(t.date)}
+        {t.name} · {txDay(t) !== t.date ? 'charged ' + fmtDate(txDay(t)) + ', posted ' + fmtDate(t.date) : fmtDate(t.date)}
         {t.pfc_detailed ? ' · Plaid: ' + t.pfc_detailed.toLowerCase().replace(/_/g, ' ') : ''}
         {' · category ' + (SOURCE_TEXT[t.category_source] || '')}
       </div>

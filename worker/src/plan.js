@@ -310,7 +310,7 @@ export async function getPlan(env, user, weeks, pastWeeks) {
     ).bind(...linkedIds, addDays(first, -3)),
     env.DB.prepare(
       `SELECT t.category_id, SUM(t.amount) AS spent FROM transactions t
-        WHERE t.category_id IN (${ph(catIds.length)}) AND t.removed = 0 AND t.is_transfer = 0 AND t.date >= ?
+        WHERE t.category_id IN (${ph(catIds.length)}) AND t.removed = 0 AND t.is_transfer = 0 AND t.eff_date >= ?
           AND t.account_id IN (SELECT a.id FROM accounts a JOIN users ow ON ow.id = a.owner_user_id WHERE ow.household_id = ?)
         GROUP BY t.category_id`
     ).bind(...catIds, monthStart, user.household_id),
