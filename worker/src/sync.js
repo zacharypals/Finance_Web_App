@@ -11,6 +11,20 @@ import { categorize } from './categorize.js';
 
 const TX_PAGE_SIZE = 250;
 
+// Ask Plaid to check the bank right now (Transactions Refresh). Results arrive a minute or two later
+// through the SYNC_UPDATES_AVAILABLE webhook. Best-effort: errors (rate limits, unsupported) are ignored.
+export async function requestBankRefresh(env, item) {
+  if (item.tx_status === 'unsupported' || item.status === 'login_required') return false;
+  try {
+    const token = await decryptToken(env, item.access_token_enc, item.access_token_iv);
+    await plaid(env, '/transactions/refresh', { access_token: token });
+    return true;
+  } catch (e) {
+    console.warn('transactions/refresh failed', item.id, e.code || e.message);
+    return false;
+  }
+}
+
 export async function syncItem(env, item, { maxPages = 3, forceSnapshot = false, transactionsOnly = false } = {}) {
   const started = Date.now();
   const logId = crypto.randomUUID();
@@ -19,7 +33,11 @@ export async function syncItem(env, item, { maxPages = 3, forceSnapshot = false,
     const token = await decryptToken(env, item.access_token_enc, item.access_token_iv);
     const today = ptDate();
 
-    if (!transactionsOnly && (forceSnapshot || item.last_snapshot_date !== today)) {
+    if (transactionsOnly) {
+      // New transactions arrived: refresh balances too, so card running totals (balance + pending)
+      // never mix an old balance with newer transactions. /accounts/get is Plaid's cached balance (free).
+      await syncAccountsAndBalances(env, item, token, today);
+    } else if (forceSnapshot || item.last_snapshot_date !== today) {
       const accounts = await syncAccountsAndBalances(env, item, token, today);
       summary.snapshot = true;
       if (accounts.some((a) => a.type === 'credit')) summary.liabilities = await syncLiabilities(env, token, accounts);

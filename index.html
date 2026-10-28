@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.8.0 -->
+<!-- Finance Pal v0.9.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -310,7 +310,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.9.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -566,7 +566,7 @@ function Connections({ onChanged }) {
         const r = await api('/api/items/' + item.id + '/sync', { method: 'POST', body: JSON.stringify({ full: full && rounds === 0 }) });
         more = r.more; added += r.added; rounds++;
       }
-      setNotice({ kind: 'ok', text: item.institution_name + ' synced' + (added ? ' — ' + added + ' new transactions.' : '.') + (more ? ' More history is still loading; sync again shortly.' : '') });
+      setNotice({ kind: 'ok', text: item.institution_name + ' synced' + (added ? ' — ' + added + ' new transactions.' : '.') + (more ? ' More history is still loading; sync again shortly.' : '') + ' Also asked the bank for anything newer — it usually arrives on its own within a minute or two.' });
     } catch (e) {
       if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: item.institution_name + ': ' + e.message });
     } finally {
@@ -1646,12 +1646,20 @@ function FundingCard({ f, onEdit }) {
       <div className="fund-head"><b>{f.name}</b>
         {f.short > 0 ? <span className="pill pill-warn">Short {fmtCents(f.short)}</span> : <span className="pill pill-ok">✓ Funded</span>}
       </div>
-      <div className="acct-meta muted">Due {shortDate(f.due)} · {f.basis === 'statement' ? 'statement balance' : f.basis === 'current balance' ? 'current balance (next statement)' : 'monthly bill'}</div>
+      <div className="acct-meta muted">
+        {f.basis === 'running' ? <>Next bill ~{shortDate(f.due)} · running total</> : <>Due {shortDate(f.due)} · {f.basis === 'statement' ? 'statement balance' : 'monthly bill'}</>}
+      </div>
       <div className="fund-bar"><span style={{ width: pct + '%' }} className={f.short > 0 ? 'short' : ''} /></div>
       <div className="fund-nums">
         <span><span className="muted">Needed</span> {fmtCents(f.need)}</span>
         <span><span className="muted">By due date</span> {fmtCents(f.available)}</span>
       </div>
+      {f.kind === 'card' && f.running !== null && f.running !== undefined && (
+        <div className="acct-meta">
+          {f.basis === 'statement' ? <>Running total <b>{fmtCents(f.running)}</b>{f.pending ? <>, including {fmtCents(f.pending)} pending</> : ''}</>
+            : f.pending ? <>Includes {fmtCents(f.pending)} pending ({f.pending_count} charge{f.pending_count === 1 ? '' : 's'})</> : 'No pending charges'}
+        </div>
+      )}
       <div className="acct-meta muted">
         {f.no_vault ? 'Not linked to a vault — only upcoming allocations are counted. ' : 'In vault now ' + fmtCents(f.balance) + (f.planned ? ' + ' + fmtCents(f.planned) + ' still to move' : '') + '. '}
         About {fmtCents(f.suggested)}/paycheck covers it.
@@ -1772,6 +1780,24 @@ function PlanView() {
     try { await api('/api/plan/cell', { method: 'PUT', body: JSON.stringify({ pay_date: d, bucket_id: b.id, amount }) }); load(); }
     catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
   }
+  const [refreshing, setRefreshing] = useState(false);
+  const pollRef = React.useRef([]);
+  useEffect(() => () => pollRef.current.forEach(clearTimeout), []);
+  async function refreshCards() {
+    setRefreshing(true); setNotice(null);
+    try {
+      const r = await api('/api/plan/refresh-cards', { method: 'POST' });
+      const errs = r.refreshed.filter(x => x.error);
+      await load();
+      setNotice(errs.length
+        ? { kind: 'err', text: errs.map(x => x.institution + ': ' + x.error).join(' · ') }
+        : { kind: 'ok', text: 'Asked your card banks for the latest. Brand-new charges usually arrive within a minute or two — this page checks again automatically.' });
+      // Plaid delivers what the banks send back a little later; look again twice.
+      pollRef.current.forEach(clearTimeout);
+      pollRef.current = [setTimeout(load, 60000), setTimeout(load, 150000)];
+    } catch (e) { if (!(e instanceof AuthError)) fail(e.message); }
+    finally { setRefreshing(false); }
+  }
   async function savePaycheck(d, text) {
     const key = 'pay|' + d.date;
     setDraft(x => { const n = { ...x }; delete n[key]; return n; });
@@ -1822,6 +1848,7 @@ function PlanView() {
   const sorter = bucketSort === 'amount' ? (a, b) => (b.weekly_amount || 0) - (a.weekly_amount || 0) || byName(a, b) : byName;
   const groups = BUCKET_KINDS.map(k => ({ ...k, list: plan.buckets.filter(b => b.kind === k.key).sort(sorter) })).filter(g => g.list.length);
   const current = plan.current_payday || (plan.moves || {}).pay_date;
+  const cardsUpdated = Math.max(0, ...plan.funding.filter(f => f.kind === 'card' && f.card_synced_at).map(f => f.card_synced_at)) || null;
   const day = selDay && days.some(d => d.date === selDay) ? selDay : current;
   const dayIdx = days.findIndex(d => d.date === day);
   const step = plan.template && plan.template.cadence === 'biweekly' ? 14 : 7;
@@ -1874,7 +1901,14 @@ function PlanView() {
       )}
 
       <div className="card">
-        <h2>Bills & cards</h2>
+        <div className="row-between">
+          <h2 style={{ margin: 0 }}>Bills & cards</h2>
+          <div className="btn-row">
+            {cardsUpdated && <span className="muted acct-meta">Cards updated {fmtAgo(cardsUpdated)}</span>}
+            <button className="btn-secondary" disabled={refreshing} onClick={refreshCards}>{refreshing ? '↻ Refreshing…' : '↻ Refresh cards'}</button>
+          </div>
+        </div>
+        <div style={{ height: 12 }} />
         {plan.funding.length === 0 ? <div className="muted acct-meta">No bills or card buckets yet.</div> :
           <div className="fund-grid">{plan.funding.map(f => <FundingCard key={f.bucket_id} f={f} onEdit={editBucket} />)}</div>}
       </div>

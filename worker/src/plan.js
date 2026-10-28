@@ -1,5 +1,6 @@
 // Phase 4: buckets, paycheck template, the Plan grid, funding status and moves.
 import { json, ptDate } from './util.js';
+import { syncItem, requestBankRefresh } from './sync.js';
 
 const KINDS = ['bill', 'card', 'goal', 'passthrough', 'spending'];
 const MAX_CENTS = 1e9;
@@ -257,6 +258,24 @@ export async function putPaycheck(env, user, body) {
   return json({ ok: true });
 }
 
+// "↻ Refresh cards": ask Plaid to check each card's bank now, and pull in what Plaid already has.
+export async function refreshCards(env, user) {
+  const items = (await env.DB.prepare(
+    `SELECT DISTINCT i.* FROM buckets b JOIN accounts a ON a.id = b.card_account_id JOIN plaid_items i ON i.id = a.item_id
+      WHERE b.kind = 'card' AND b.archived = 0 AND i.owner_user_id = ?
+        AND ((b.scope_type = 'user' AND b.scope_id = ?) OR (b.scope_type = 'household' AND b.scope_id = ?))`
+  ).bind(user.id, user.id, user.household_id).all()).results;
+  const out = [];
+  for (const item of items) {
+    const asked = await requestBankRefresh(env, item);
+    let error = null;
+    try { await syncItem(env, item, { maxPages: 1, forceSnapshot: true }); }
+    catch (e) { error = e.code || e.message; }
+    out.push({ institution: item.institution_name, asked_bank: asked, error });
+  }
+  return json({ refreshed: out });
+}
+
 // ── The plan ───────────────────────────────────────────
 export async function getPlan(env, user, weeks, pastWeeks) {
   const today = ptDate();
@@ -265,6 +284,7 @@ export async function getPlan(env, user, weeks, pastWeeks) {
     `SELECT b.*, ta.amount AS weekly_amount,
             COALESCE(la.display_name, la.name) AS linked_name, lb.current AS linked_balance, lb.date AS linked_balance_date,
             COALESCE(ca.display_name, ca.name) AS card_name, cb.current AS card_balance,
+            (SELECT i.last_synced_at FROM plaid_items i WHERE i.id = ca.item_id) AS card_synced_at,
             cs.statement_balance, cs.statement_date, cs.due_date AS statement_due, cs.last_payment_amount, cs.last_payment_date,
             c.name AS category_name
        FROM buckets b
@@ -294,7 +314,8 @@ export async function getPlan(env, user, weeks, pastWeeks) {
   const linkedIds = buckets.map((b) => b.linked_account_id).filter(Boolean);
   const catIds = buckets.map((b) => b.category_id).filter(Boolean);
   const ph = (n) => Array(n).fill('?').join(',') || 'NULL';
-  const [cellsRes, payRes, vaultInRes, spendRes, overrideRes] = await env.DB.batch([
+  const cardIds = buckets.map((b) => b.card_account_id).filter(Boolean);
+  const [cellsRes, payRes, vaultInRes, spendRes, overrideRes, pendingRes] = await env.DB.batch([
     // (index 4, below) per-week paycheck amounts you typed in — bonuses, reimbursements
     env.DB.prepare('SELECT pay_date, bucket_id, amount, done FROM plan_cells WHERE user_id = ? AND pay_date >= ? AND pay_date <= ?')
       .bind(user.id, addDays(first, -60), lastDay),
@@ -316,7 +337,12 @@ export async function getPlan(env, user, weeks, pastWeeks) {
     ).bind(...catIds, monthStart, user.household_id),
     env.DB.prepare('SELECT pay_date, expected_total FROM paychecks WHERE user_id = ? AND pay_date >= ? AND pay_date <= ? AND expected_total IS NOT NULL')
       .bind(user.id, first, lastDay),
+    // Pending card activity (charges positive, pending credits negative). Your banks report pending
+    // separately from the card's current balance, so running total = current balance + pending.
+    env.DB.prepare(`SELECT account_id, SUM(amount) AS pending, COUNT(*) AS n FROM transactions
+                     WHERE account_id IN (${ph(cardIds.length)}) AND pending = 1 AND removed = 0 GROUP BY account_id`).bind(...cardIds),
   ]);
+  const pendingByCard = new Map(pendingRes.results.map((r) => [r.account_id, r]));
 
   // cells[bucket][date] = { amount, override, done, auto }
   const overrides = new Map(cellsRes.results.map((c) => [c.bucket_id + '|' + c.pay_date, c]));
@@ -349,15 +375,20 @@ export async function getPlan(env, user, weeks, pastWeeks) {
   const funding = [];
   for (const b of buckets) {
     if (b.kind !== 'bill' && b.kind !== 'card') continue;
-    let due = null, need = null, basis = null, prevDue = null;
+    let due = null, need = null, basis = null, prevDue = null, running = null, pending = null, pendingCount = 0;
     if (b.kind === 'card') {
+      if (b.card_account_id && b.card_balance !== null && b.card_balance !== undefined) {
+        const p = pendingByCard.get(b.card_account_id);
+        pending = p ? p.pending : 0; pendingCount = p ? p.n : 0;
+        running = b.card_balance + pending;
+      }
       const paid = b.last_payment_date && b.statement_date && b.last_payment_date >= b.statement_date &&
         (b.last_payment_amount || 0) >= (b.statement_balance || 0) - 100;
       if (b.statement_due && b.statement_due >= today && !paid) {
         due = b.statement_due; need = b.statement_balance; basis = 'statement';
       } else if (b.card_account_id) {
         due = b.statement_due ? (b.statement_due >= today ? addMonth(b.statement_due) : nextMonthly(Number(b.statement_due.slice(8)), today)) : null;
-        need = b.card_balance; basis = 'current balance';
+        need = running; basis = 'running';
       }
       if (due) prevDue = addDays(due, -30);
     } else if (b.due_day) {
@@ -377,6 +408,7 @@ export async function getPlan(env, user, weeks, pastWeeks) {
     const windowDays = countPaydays(template, prevDue, due) || 1;
     funding.push({
       bucket_id: b.id, name: b.name, kind: b.kind, due, need, basis, balance, planned, available,
+      running, pending, pending_count: pendingCount, card_synced_at: b.card_synced_at || null,
       short: Math.max(0, need - available), suggested: Math.ceil(need / windowDays / 100) * 100,
       no_vault: !b.linked_account_id,
     });

@@ -15,7 +15,7 @@
 import { json, sha256Hex } from './util.js';
 import { encryptToken, decryptToken } from './crypto.js';
 import { plaid, PlaidError, verifyPlaidWebhook } from './plaid.js';
-import { syncItem, runScheduledSync } from './sync.js';
+import { syncItem, runScheduledSync, requestBankRefresh } from './sync.js';
 import { listAccounts, patchAccounts, putManualBalance, deleteManualBalance, monthLevels, netWorth, holdings } from './accounts.js';
 
 import {
@@ -23,11 +23,11 @@ import {
   listRules, createRule, deleteRule, rerunCategorization, reportSummary,
 } from './transactions.js';
 
-import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell, putPaycheck } from './plan.js';
+import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell, putPaycheck, refreshCards } from './plan.js';
 
 import { listExpenses, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
 
-const WORKER_VERSION = '0.8.0';
+const WORKER_VERSION = '0.9.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -129,6 +129,7 @@ async function routeApi(req, env, ctx, url, user) {
   // Phase 4: plan
   if (path === '/api/plan' && method === 'GET') return getPlan(env, user, Number(url.searchParams.get('weeks')), Number(url.searchParams.get('past')));
   if (path === '/api/plan/paycheck' && method === 'PUT') return putPaycheck(env, user, await body());
+  if (path === '/api/plan/refresh-cards' && method === 'POST') return refreshCards(env, user);
   if (path === '/api/plan/template' && method === 'PUT') return putTemplate(env, user, await body());
   if (path === '/api/plan/cell' && method === 'PUT') return putCell(env, user, await body());
   if (path === '/api/buckets' && method === 'POST') return createBucket(env, user, await body());
@@ -161,8 +162,10 @@ async function routeApi(req, env, ctx, url, user) {
     if (!m[3] && method === 'DELETE') return removeItem(env, item);
     if (m[3] === 'sync' && method === 'POST') {
       const body = await req.json().catch(() => ({}));
+      // First round of "Sync now" also asks Plaid to check the bank right away.
+      const askedBank = body.full ? await requestBankRefresh(env, item) : false;
       const summary = await syncItem(env, item, { maxPages: 3, forceSnapshot: !!body.full });
-      return json(summary);
+      return json({ ...summary, asked_bank: askedBank });
     }
     if (m[3] === 'reconnected' && method === 'POST') {
       await env.DB.prepare("UPDATE plaid_items SET status = 'ok', error_code = NULL WHERE id = ?").bind(item.id).run();
