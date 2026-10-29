@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.9.0 -->
+<!-- Finance Pal v0.9.1 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -310,7 +310,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.9.1';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1847,12 +1847,16 @@ function PlanView() {
   const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
   const sorter = bucketSort === 'amount' ? (a, b) => (b.weekly_amount || 0) - (a.weekly_amount || 0) || byName(a, b) : byName;
   const groups = BUCKET_KINDS.map(k => ({ ...k, list: plan.buckets.filter(b => b.kind === k.key).sort(sorter) })).filter(g => g.list.length);
-  const current = plan.current_payday || (plan.moves || {}).pay_date;
+  const isoShift = (iso, n) => { const x = parseIso(iso); x.setDate(x.getDate() + n); return isoDate(x); };
+  // "This week" = the payday inside the current Sunday–Saturday week (Pacific); falls back to the most recent payday
+  // (e.g. a biweekly off-week). Funding math in the Worker still uses the most recent payday on or before today.
+  const weekStart = plan.today ? isoShift(plan.today, -parseIso(plan.today).getDay()) : null;
+  const weekDay = weekStart ? (days.find(d => d.date >= weekStart && d.date <= isoShift(weekStart, 6)) || {}).date : null;
+  const current = weekDay || plan.current_payday || (plan.moves || {}).pay_date;
   const cardsUpdated = Math.max(0, ...plan.funding.filter(f => f.kind === 'card' && f.card_synced_at).map(f => f.card_synced_at)) || null;
   const day = selDay && days.some(d => d.date === selDay) ? selDay : current;
   const dayIdx = days.findIndex(d => d.date === day);
   const step = plan.template && plan.template.cadence === 'biweekly' ? 14 : 7;
-  const isoShift = (iso, n) => { const x = parseIso(iso); x.setDate(x.getDate() + n); return isoDate(x); };
   const moves = day ? {
     pay_date: day,
     // Same order as the Buckets section and the grid (by type group, then your Name/Amount sort).
@@ -1934,7 +1938,7 @@ function PlanView() {
             <thead><tr>
               <th className="sticky">Bucket</th><th>Now</th>
               {days.map(d => <th key={d.date} className={(d.date === day ? 'cur ' : '') + (d.date < current ? 'past ' : '') + 'pickable'}
-                title="Show this paycheck’s moves" onClick={() => setSelDay(d.date)}>{shortDate(d.date)}{d.is_current && <span className="this-week">this week</span>}</th>)}
+                title="Show this paycheck’s moves" onClick={() => setSelDay(d.date)}>{shortDate(d.date)}{d.date === current && <span className="this-week">this week</span>}</th>)}
             </tr></thead>
             {groups.map(g => (
               <tbody key={g.key}>
