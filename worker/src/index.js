@@ -25,9 +25,10 @@ import {
 
 import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell, putPaycheck, refreshCards } from './plan.js';
 
+import { listTags, createTag, patchTag, deleteTag, plaidCodes } from './tags.js';
 import { listExpenses, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
 
-const WORKER_VERSION = '0.9.0';
+const WORKER_VERSION = '0.10.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -102,7 +103,9 @@ async function routeApi(req, env, ctx, url, user) {
   if (path === '/api/transactions' && method === 'GET') return listTransactions(env, user, url.searchParams);
   if (path === '/api/transactions/bulk' && method === 'POST') {
     const b = await body();
-    return patchTransactions(env, user, Array.isArray(b.ids) ? b.ids.map(String) : [], { category_id: b.category_id ?? null });
+    const patch = { tags_add: b.tags_add, tags_remove: b.tags_remove };
+    if ('category_id' in b) patch.category_id = b.category_id ?? null;
+    return patchTransactions(env, user, Array.isArray(b.ids) ? b.ids.map(String) : [], patch);
   }
   const tm = path.match(/^\/api\/transactions\/([^/]+)(\/reset)?$/);
   if (tm && !tm[2] && method === 'PATCH') return patchTransactions(env, user, [tm[1]], await body());
@@ -112,6 +115,12 @@ async function routeApi(req, env, ctx, url, user) {
   const rm = path.match(/^\/api\/rules\/([^/]+)$/);
   if (rm && method === 'DELETE') return deleteRule(env, user, rm[1]);
   if (path === '/api/categorize/rerun' && method === 'POST') return rerunCategorization(env, user);
+  if (path === '/api/tags' && method === 'GET') return listTags(env, user);
+  if (path === '/api/tags' && method === 'POST') return createTag(env, user, await body());
+  if (path === '/api/tags/plaid-codes' && method === 'GET') return plaidCodes(env, user);
+  const gm = path.match(/^\/api\/tags\/([^/]+)$/);
+  if (gm && method === 'PATCH') return patchTag(env, user, gm[1], await body());
+  if (gm && method === 'DELETE') return deleteTag(env, user, gm[1]);
   if (path === '/api/reports/summary' && method === 'GET') return reportSummary(env, user, url.searchParams);
 
   // Expenses

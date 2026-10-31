@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.9.2 -->
+<!-- Finance Pal v0.10.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -200,6 +200,23 @@ input[type=text], input[type=date], input[type=number], select {
 .chip-add { color: var(--accent); border-style: dashed; }
 .chip.editing { padding: 3px 6px; }
 .chip.editing input { padding: 4px 8px; font-size: 13px; width: 150px; }
+/* Tags (v0.10.0) */
+.tx-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tag-chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--accent-light); color: var(--accent); white-space: nowrap; }
+.tag-toggle { background: var(--paper); border: 1px solid var(--border); color: var(--ink-light); border-radius: 999px; padding: 4px 11px; font-size: 13px; }
+.tag-toggle.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tag-toggle.on::before { content: '✓ '; }
+.rep-tag .rep-label { padding-left: 34px; color: var(--ink-light); font-size: 13px; }
+.rep-tag .rep-bar { height: 6px; }
+.rep-tag .rep-bar span { opacity: .3; }
+.rep-tag .rep-val { font-size: 13px; color: var(--ink-light); }
+.rep-tag.untagged .rep-label { font-style: italic; }
+.rep-chev { background: none; border: 0; color: var(--ink-light); padding: 0 4px 0 0; font-size: 11px; width: 16px; }
+.rep-overlap { padding: 0 4px 6px 38px; font-size: 12px; color: var(--ink-faint); }
+.code-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 16px; max-height: 320px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--paper); }
+.code-list label { display: flex !important; align-items: center; gap: 8px; color: var(--ink) !important; font-size: 13px; }
+.code-list .muted { margin-left: auto; font-size: 12px; }
 @media (max-width: 767px) {
   .tx-row { flex-wrap: wrap; }
   .tx-main { flex-basis: calc(100% - 112px); }
@@ -207,6 +224,8 @@ input[type=text], input[type=date], input[type=number], select {
   .tx-cat select { max-width: 100%; width: 100%; }
   .rep-row { grid-template-columns: 1fr 90px; }
   .rep-bar { grid-column: 1 / -1; grid-row: 2; }
+  .rep-tag .rep-bar { display: none; }
+  .rep-tag .rep-label { padding-left: 26px; }
   .filters select, .filters input[type=text] { flex: 1 1 45%; max-width: none; }
 }
 
@@ -310,7 +329,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.9.2';
+const APP_VERSION = '0.10.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1024,6 +1043,46 @@ function useCategories() {
   return [cats || [], reload];
 }
 
+// Tags (v0.10.0): same caching pattern as categories.
+// Every mounted user of the hook hears about a reload, so Settings and Transactions stay in step.
+let _tagCache = null;
+const _tagListeners = new Set();
+function useTags() {
+  const [tags, setTags] = useState(_tagCache);
+  useEffect(() => { _tagListeners.add(setTags); return () => { _tagListeners.delete(setTags); }; }, []);
+  const reload = useCallback(async () => {
+    try { const r = await api('/api/tags'); _tagCache = r.tags; _tagListeners.forEach(fn => fn(r.tags)); }
+    catch (e) { if (!(e instanceof AuthError)) console.warn('Loading tags failed', e); }
+  }, []);
+  useEffect(() => { if (!_tagCache) reload(); }, [reload]);
+  return [tags || [], reload];
+}
+const tagIdsOf = (t) => (t.tag_ids ? t.tag_ids.split(',') : []);
+const tagNamesOf = (t, tags) => tagIdsOf(t).map(id => (tags.find(g => g.id === id) || {}).name).filter(Boolean).sort();
+
+function TagSelect({ tags, value, onChange, includeAll, placeholder = 'Choose a tag…', disabled }) {
+  return (
+    <select value={value || ''} onChange={e => onChange(e.target.value || '')} disabled={disabled} onClick={e => e.stopPropagation()}>
+      {includeAll ? <option value="">All tags</option> : <option value="">{placeholder}</option>}
+      {includeAll && <option value="none">Untagged</option>}
+      {tags.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+    </select>
+  );
+}
+
+// Plaid's detailed codes, readable: FOOD_AND_DRINK_FAST_FOOD → "Fast food" under "Food and drink".
+const PFC_PRIMARY = ['INCOME', 'TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS', 'BANK_FEES', 'ENTERTAINMENT', 'FOOD_AND_DRINK',
+  'GENERAL_MERCHANDISE', 'HOME_IMPROVEMENT', 'MEDICAL', 'PERSONAL_CARE', 'GENERAL_SERVICES', 'GOVERNMENT_AND_NON_PROFIT',
+  'TRANSPORTATION', 'TRAVEL', 'RENT_AND_UTILITIES'];
+const _words = (s) => { const w = s.toLowerCase().replace(/_/g, ' '); return w.charAt(0).toUpperCase() + w.slice(1); };
+function pfcLabel(code) {
+  const c = code.replace(/^P:/, '');
+  const p = PFC_PRIMARY.slice().sort((a, b) => b.length - a.length).find(x => c === x || c.startsWith(x + '_'));
+  if (!p) return { name: _words(c), group: '' };
+  if (c === p || code.startsWith('P:')) return { name: 'Anything in ' + _words(p).toLowerCase(), group: _words(p) };
+  return { name: _words(c.slice(p.length + 1)), group: _words(p) };
+}
+
 function CategorySelect({ cats, value, onChange, includeAll, includeUncat = true, disabled }) {
   const parents = cats.filter(c => !c.parent_id && !c.archived);
   return (
@@ -1141,24 +1200,24 @@ function buildXlsx(sheets) {
 }
 
 // Amount convention in the file: money out is negative, money in is positive (like a bank statement).
-function buildTransactionsXlsx(txns, filters) {
-  const header = ['Date', 'Description', 'Bank description', 'Account', 'Group', 'Category', 'Amount', 'Transfer', 'Pending', 'Notes', 'Posted'];
+function buildTransactionsXlsx(txns, filters, tags = []) {
+  const header = ['Date', 'Description', 'Bank description', 'Account', 'Group', 'Category', 'Tags', 'Amount', 'Transfer', 'Pending', 'Notes', 'Posted'];
   const rows = [header];
   for (const t of txns) {
     rows.push([
       { date: txDay(t) }, t.merchant_name || t.name || '', t.name || '',
       (t.account_name || '') + (t.account_mask ? ' ••' + t.account_mask : ''),
-      t.category_group || '', t.category_name || 'Uncategorized',
+      t.category_group || '', t.category_name || 'Uncategorized', tagNamesOf(t, tags).join(', '),
       { money: -t.amount / 100 }, t.is_transfer ? 'Yes' : '', t.pending ? 'Yes' : '', t.notes || '', { date: t.date },
     ]);
   }
   const last = rows.length;
-  const totals = ['Total', txns.length + ' transactions', '', '', '', '', { f: `SUM(G2:G${last})`, s: 4 }];
+  const totals = ['Total', txns.length + ' transactions', '', '', '', '', '', { f: `SUM(H2:H${last})`, s: 4 }];
   totals.bold = true;
   rows.push([], totals);
   const filterRows = [['Filter', 'Value'], ...filters.map(([k, v]) => [k, v])];
   return buildXlsx([
-    { name: 'Transactions', cols: header.length, autofilter: last, xml: sheetXml(rows, { header: true, autofilter: last, widths: [13, 30, 38, 24, 16, 20, 13, 9, 9, 30, 13] }) },
+    { name: 'Transactions', cols: header.length, autofilter: last, xml: sheetXml(rows, { header: true, autofilter: last, widths: [13, 30, 38, 24, 16, 20, 24, 13, 9, 9, 30, 13] }) },
     { name: 'Filters', xml: sheetXml(filterRows, { header: true, widths: [16, 40] }) },
   ]);
 }
@@ -1173,12 +1232,14 @@ function downloadBlob(blob, filename) {
 
 function TransactionsView({ initialFilter }) {
   const [cats, reloadCats] = useCategories();
+  const [tags, reloadTags] = useTags();
   const [accounts, setAccounts] = useState([]);
   const init = initialFilter || {};
   const [preset, setPreset] = useState(init.from ? 'custom' : 'last30');
   const [range, setRange] = useState(() => init.from ? { from: init.from, to: init.to } : periodRange('last30'));
   const [account, setAccount] = useState('');
   const [category, setCategory] = useState(init.category || '');
+  const [tag, setTag] = useState(init.tag || '');
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   const [hideTransfers, setHideTransfers] = useState(false);
@@ -1189,7 +1250,8 @@ function TransactionsView({ initialFilter }) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [bulkCat, setBulkCat] = useState('');
-  const [prompt, setPrompt] = useState(null);     // { text, category_id, category_name }
+  const [bulkTag, setBulkTag] = useState('');
+  const [prompt, setPrompt] = useState(null);     // { text, category_id | tag_id, label, kind: 'category' | 'tag' }
   const [notice, setNotice] = useState(null);
 
   useEffect(() => { api('/api/accounts').then(r => setAccounts(r.accounts.filter(a => !a.hidden))).catch(e => { if (!(e instanceof AuthError)) console.warn(e); }); }, []);
@@ -1199,10 +1261,11 @@ function TransactionsView({ initialFilter }) {
     const p = new URLSearchParams({ from: range.from, to: range.to, limit: String(limit), offset: String(offset) });
     if (account) p.set('account', account);
     if (category) p.set('category', category);
+    if (tag) p.set('tag', tag);
     if (q) p.set('q', q);
     if (hideTransfers) p.set('transfers', 'hide');
     return api('/api/transactions?' + p.toString());
-  }, [range, account, category, q, hideTransfers]);
+  }, [range, account, category, tag, q, hideTransfers]);
 
   const load = useCallback(async () => {
     try { const r = await query(0); setData(r); setRows(r.transactions); }
@@ -1227,16 +1290,44 @@ function TransactionsView({ initialFilter }) {
       await api('/api/transactions/' + t.id, { method: 'PATCH', body: JSON.stringify({ category_id: categoryId }) });
       const c = cats.find(x => x.id === categoryId);
       setRows(rs => rs.map(r => r.id === t.id ? { ...r, category_id: categoryId, category_name: c ? c.name : null, category_source: 'manual', is_transfer: c && c.kind === 'transfer' ? 1 : 0 } : r));
-      if (categoryId) setPrompt({ text: t.merchant_name || t.name || '', category_id: categoryId, category_name: c ? c.name : '' });
+      if (categoryId) setPrompt({ kind: 'category', text: t.merchant_name || t.name || '', category_id: categoryId, label: c ? c.name : '' });
       else setPrompt(null);
+    } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
+  }
+
+  // Turn one tag on/off for one transaction. Tagging the same merchant the same way a second time
+  // offers an "always tag" rule.
+  async function toggleTag(t, tagId, on) {
+    try {
+      await api('/api/transactions/' + t.id, { method: 'PATCH', body: JSON.stringify(on ? { tags_add: [tagId] } : { tags_remove: [tagId] }) });
+      const next = (r) => { const ids = tagIdsOf(r).filter(x => x !== tagId); if (on) ids.push(tagId); return ids.join(',') || null; };
+      setRows(rs => rs.map(r => r.id === t.id ? { ...r, tag_ids: next(r) } : r));
+      const who = (t.merchant_name || t.name || '').trim();
+      const seen = on && who && rows.some(r => r.id !== t.id && (r.merchant_name || r.name || '').trim().toLowerCase() === who.toLowerCase() && tagIdsOf(r).includes(tagId));
+      const g = tags.find(x => x.id === tagId);
+      if (seen) setPrompt({ kind: 'tag', text: who, tag_id: tagId, label: g ? g.name : '' });
+      else if (prompt && prompt.kind === 'tag') setPrompt(null);
     } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
   }
 
   async function makeRule() {
     try {
-      await api('/api/rules', { method: 'POST', body: JSON.stringify({ value: prompt.text, op: 'contains', category_id: prompt.category_id }) });
-      setNotice({ kind: 'ok', text: 'Rule saved — everything matching “' + prompt.text + '” is now ' + prompt.category_name + ', including past transactions you haven’t set by hand.' });
+      const body = { value: prompt.text, op: 'contains', ...(prompt.kind === 'tag' ? { tag_id: prompt.tag_id } : { category_id: prompt.category_id }) };
+      await api('/api/rules', { method: 'POST', body: JSON.stringify(body) });
+      setNotice({ kind: 'ok', text: prompt.kind === 'tag'
+        ? 'Rule saved — everything matching “' + prompt.text + '” gets the ' + prompt.label + ' tag, including past transactions.'
+        : 'Rule saved — everything matching “' + prompt.text + '” is now ' + prompt.label + ', including past transactions you haven’t set by hand.' });
       setPrompt(null); load();
+    } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
+  }
+
+  async function bulkTagApply(on) {
+    if (!selected.size || !bulkTag) return;
+    try {
+      const r = await api('/api/transactions/bulk', { method: 'POST', body: JSON.stringify({ ids: [...selected], [on ? 'tags_add' : 'tags_remove']: [bulkTag] }) });
+      const g = tags.find(x => x.id === bulkTag);
+      setNotice({ kind: 'ok', text: (on ? 'Tagged ' : 'Removed the tag from ') + r.updated + ' transaction' + (r.updated === 1 ? '' : 's') + (on && g ? ' as ' + g.name : '') + '.' });
+      setSelected(new Set()); load();
     } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
   }
 
@@ -1267,10 +1358,11 @@ function TransactionsView({ initialFilter }) {
       const filters = [
         ['From', { date: range.from }], ['To', { date: range.to }],
         ['Account', acctLabel ? acctName(acctLabel) + (acctLabel.mask ? ' ••' + acctLabel.mask : '') : 'All accounts'],
-        ['Category', catLabel], ['Search', q || '(none)'], ['Transfers', hideTransfers ? 'Hidden' : 'Included'],
+        ['Category', catLabel], ['Tag', !tag ? 'All tags' : tag === 'none' ? 'Untagged' : ((tags.find(g => g.id === tag) || {}).name || tag)],
+        ['Search', q || '(none)'], ['Transfers', hideTransfers ? 'Hidden' : 'Included'],
         ['Transactions', all.length], ['Exported', new Date().toLocaleString('en-US')],
       ];
-      const blob = buildTransactionsXlsx(all, filters);
+      const blob = buildTransactionsXlsx(all, filters, tags);
       downloadBlob(blob, 'Finance Pal transactions ' + range.from + ' to ' + range.to + '.xlsx');
       setNotice({ kind: 'ok', text: 'Exported ' + all.length + ' transaction' + (all.length === 1 ? '' : 's') + ' to Excel.' });
     } catch (e) {
@@ -1308,6 +1400,7 @@ function TransactionsView({ initialFilter }) {
           {accounts.map(a => <option key={a.id} value={a.id}>{acctName(a)}{a.mask ? ' ••' + a.mask : ''}</option>)}
         </select>
         <CategorySelect cats={cats} value={category} onChange={v => setCategory(v || '')} includeAll />
+        <TagSelect tags={tags} value={tag} onChange={setTag} includeAll />
         <input type="text" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} style={{ minWidth: 140, flex: 1 }} />
         <label className="check-inline"><input type="checkbox" checked={hideTransfers} onChange={e => setHideTransfers(e.target.checked)} /> Hide transfers</label>
       </div>
@@ -1318,9 +1411,9 @@ function TransactionsView({ initialFilter }) {
       {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
       {prompt && (
         <div className="rule-prompt">
-          <span>Always categorize</span>
+          <span>{prompt.kind === 'tag' ? 'Always tag' : 'Always categorize'}</span>
           <input type="text" value={prompt.text} onChange={e => setPrompt(p => ({ ...p, text: e.target.value }))} />
-          <span>as <b>{prompt.category_name}</b>?</span>
+          <span>as <b>{prompt.label}</b>?</span>
           <button className="btn-primary btn-inline" disabled={!prompt.text.trim()} onClick={makeRule}>Yes, make a rule</button>
           <button className="btn-text" onClick={() => setPrompt(null)}>Just this one</button>
         </div>
@@ -1330,6 +1423,9 @@ function TransactionsView({ initialFilter }) {
           <span>{selected.size} selected</span>
           <CategorySelect cats={cats} value={bulkCat} onChange={v => setBulkCat(v || '')} includeUncat={false} />
           <button disabled={!selected.size || !bulkCat} onClick={bulkApply}>Set category</button>
+          <TagSelect tags={tags} value={bulkTag} onChange={setBulkTag} />
+          <button disabled={!selected.size || !bulkTag} onClick={() => bulkTagApply(true)}>Add tag</button>
+          <button disabled={!selected.size || !bulkTag} onClick={() => bulkTagApply(false)}>Remove tag</button>
         </div>
       )}
 
@@ -1346,13 +1442,16 @@ function TransactionsView({ initialFilter }) {
                 <div className="tx-main">
                   <div className="tx-name">{t.merchant_name || t.name}{t.pending ? <span className="pill pill-muted" style={{ marginLeft: 6 }}>pending</span> : null}</div>
                   <div className="acct-meta muted">{t.account_name}{t.account_mask ? ' ••' + t.account_mask : ''}{t.notes ? ' · ' + t.notes : ''}</div>
+                  {t.tag_ids && <div className="tx-tags">{tagNamesOf(t, tags).map(n => <span key={n} className="tag-chip">{n}</span>)}</div>}
                 </div>
                 <div className="tx-cat">
                   <CategorySelect cats={cats} value={t.category_id} onChange={v => setCat(t, v)} disabled={selecting} />
                 </div>
                 <div className="tx-amt"><Amount cents={t.amount} transfer={t.is_transfer} /></div>
               </div>
-              {open === t.id && !selecting && <TxDetail t={t} onSaved={(msg) => { setNotice({ kind: 'ok', text: msg }); load(); }} onError={(m) => setNotice({ kind: 'err', text: m })} />}
+              {open === t.id && !selecting && <TxDetail t={t} tags={tags} onToggleTag={(id, on) => toggleTag(t, id, on)}
+                onNewTag={async (name) => { const r = await api('/api/tags', { method: 'POST', body: JSON.stringify({ name }) }); await reloadTags(); await toggleTag(t, r.id, true); }}
+                onSaved={(msg) => { setNotice({ kind: 'ok', text: msg }); load(); }} onError={(m) => setNotice({ kind: 'err', text: m })} />}
             </React.Fragment>
           );
         })}
@@ -1366,9 +1465,19 @@ function TransactionsView({ initialFilter }) {
   );
 }
 
-function TxDetail({ t, onSaved, onError }) {
+function TxDetail({ t, tags, onToggleTag, onNewTag, onSaved, onError }) {
   const [notes, setNotes] = useState(t.notes || '');
   const [busy, setBusy] = useState(false);
+  const [newTag, setNewTag] = useState(null);
+  const on = new Set(tagIdsOf(t));
+  async function toggle(id) { setBusy(true); try { await onToggleTag(id, !on.has(id)); } finally { setBusy(false); } }
+  async function addNew() {
+    if (!newTag || !newTag.trim()) return;
+    setBusy(true);
+    try { await onNewTag(newTag.trim()); setNewTag(null); }
+    catch (e) { if (!(e instanceof AuthError)) onError(e.message); }
+    finally { setBusy(false); }
+  }
   async function saveNotes() {
     setBusy(true);
     try { await api('/api/transactions/' + t.id, { method: 'PATCH', body: JSON.stringify({ notes }) }); onSaved('Note saved.'); }
@@ -1387,6 +1496,19 @@ function TxDetail({ t, onSaved, onError }) {
         {t.name} · {txDay(t) !== t.date ? 'charged ' + fmtDate(txDay(t)) + ', posted ' + fmtDate(t.date) : fmtDate(t.date)}
         {t.pfc_detailed ? ' · Plaid: ' + t.pfc_detailed.toLowerCase().replace(/_/g, ' ') : ''}
         {' · category ' + (SOURCE_TEXT[t.category_source] || '')}
+      </div>
+      <div>
+        <div className="acct-meta muted" style={{ marginBottom: 6 }}>Tags</div>
+        <div className="chips" style={{ marginTop: 0 }}>
+          {tags.map(g => <button key={g.id} className={'tag-toggle' + (on.has(g.id) ? ' on' : '')} disabled={busy} onClick={() => toggle(g.id)}>{g.name}</button>)}
+          {newTag === null
+            ? <button className="chip chip-add" onClick={() => setNewTag('')}>+ New tag</button>
+            : <span className="chip editing">
+                <input type="text" value={newTag} autoFocus maxLength={30} placeholder="New tag" onChange={e => setNewTag(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addNew(); if (e.key === 'Escape') setNewTag(null); }} />
+                <button className="btn-text" disabled={busy || !newTag.trim()} onClick={addNew}>Add</button>
+              </span>}
+        </div>
       </div>
       <label>Note <input type="text" value={notes} maxLength={500} onChange={e => setNotes(e.target.value)} placeholder="e.g. split with Christine" /></label>
       <div className="btn-row">
@@ -1411,9 +1533,46 @@ function groupByParent(rows) {
   return [...byParent.values()].filter(g => g.total > 0 || g.children.length).sort((a, b) => b.total - a.total);
 }
 
-function CategoryBreakdown({ title, rows, emptyText, note, range, onDrill }) {
+// Which categories have their tag rows collapsed (remembered on this device; open by default).
+function useClosedTagRows() {
+  const [closed, setClosed] = useState(() => { try { return new Set(JSON.parse(lsGet('fp_rep_tags_closed') || '[]')); } catch (e) { return new Set(); } });
+  const toggle = (id) => setClosed(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id);
+    lsSet('fp_rep_tags_closed', JSON.stringify([...n]));
+    return n;
+  });
+  return [closed, toggle];
+}
+
+function CategoryBreakdown({ title, rows, emptyText, note, range, onDrill, tagRows = [], untaggedRows = [] }) {
   const groups = groupByParent(rows);
   const maxGroup = Math.max(1, ...groups.map(g => g.total));
+  const [closed, toggleClosed] = useClosedTagRows();
+  const tagsFor = (id) => tagRows.filter(r => r.category_id === id).sort((a, b) => b.total - a.total);
+  const untaggedFor = (id) => untaggedRows.find(r => r.category_id === id);
+  const tagLines = (c) => {
+    const list = tagsFor(c.category_id);
+    if (!list.length || closed.has(c.category_id)) return null;
+    const un = untaggedFor(c.category_id);
+    const overlap = list.reduce((s, r) => s + r.total, 0) + (un ? un.total : 0) > c.total + 1;
+    return <>
+      {list.map(r => (
+        <div key={r.tag_id} className="rep-row rep-tag" onClick={() => onDrill({ category: c.category_id, tag: r.tag_id, from: range.from, to: range.to })}>
+          <span className="rep-label">{r.tag_name}</span>
+          <span className="rep-bar"><span style={{ width: Math.max(0, r.total) / maxGroup * 100 + '%' }} /></span>
+          <span className="rep-val">{fmtCents(r.total)}</span>
+        </div>
+      ))}
+      {un && un.total !== 0 && (
+        <div className="rep-row rep-tag untagged" onClick={() => onDrill({ category: c.category_id, tag: 'none', from: range.from, to: range.to })}>
+          <span className="rep-label">Untagged</span>
+          <span className="rep-bar"><span style={{ width: Math.max(0, un.total) / maxGroup * 100 + '%' }} /></span>
+          <span className="rep-val">{fmtCents(un.total)}</span>
+        </div>
+      )}
+      {overlap && <div className="rep-overlap">Some purchases have more than one tag, so these add up to more than {fmtCents(c.total)}.</div>}
+    </>;
+  };
   return (
     <div className="card">
       <h2>{title}</h2>
@@ -1426,11 +1585,20 @@ function CategoryBreakdown({ title, rows, emptyText, note, range, onDrill }) {
             <span className="rep-val">{fmtCents(g.total)}</span>
           </div>
           {g.children.slice().sort((a, b) => b.total - a.total).map(c => (
-            <div key={c.category_id} className="rep-row rep-child" onClick={() => onDrill({ category: c.category_id, from: range.from, to: range.to })}>
-              <span className="rep-label">{c.name}</span>
-              <span className="rep-bar"><span style={{ width: Math.max(0, c.total) / maxGroup * 100 + '%' }} /></span>
-              <span className="rep-val">{fmtCents(c.total)}</span>
-            </div>
+            <React.Fragment key={c.category_id}>
+              <div className="rep-row rep-child" onClick={() => onDrill({ category: c.category_id, from: range.from, to: range.to })}>
+                <span className="rep-label">
+                  {tagsFor(c.category_id).length > 0 && (
+                    <button className="rep-chev" aria-label={closed.has(c.category_id) ? 'Show tags' : 'Hide tags'} aria-expanded={!closed.has(c.category_id)}
+                      onClick={e => { e.stopPropagation(); toggleClosed(c.category_id); }}>{closed.has(c.category_id) ? '▸' : '▾'}</button>
+                  )}
+                  {c.name}
+                </span>
+                <span className="rep-bar"><span style={{ width: Math.max(0, c.total) / maxGroup * 100 + '%' }} /></span>
+                <span className="rep-val">{fmtCents(c.total)}</span>
+              </div>
+              {tagLines(c)}
+            </React.Fragment>
           ))}
         </div>
       ))}
@@ -1497,7 +1665,8 @@ function ReportsView({ onDrill }) {
         )}
 
         <CategoryBreakdown title="Spending by category" rows={data.by_category} emptyText="No spending in this period." range={range} onDrill={onDrill}
-          note="Transfers between your accounts, card payments and income aren’t counted as spending. Click any row to see its transactions." />
+          tagRows={data.by_category_tag || []} untaggedRows={data.by_category_untagged || []}
+          note="Transfers between your accounts, card payments and income aren’t counted as spending. Tags are listed under their category (▾ to fold). Click any row to see its transactions." />
         <CategoryBreakdown title="Income by category" rows={data.income_by_category || []} emptyText="No income in this period." range={range} onDrill={onDrill}
           note="Deposits categorized as Income. A refund or reimbursement shows here only if you categorize it as income." />
 
@@ -1529,20 +1698,128 @@ function ReportsView({ onDrill }) {
   );
 }
 
+function TagEditor({ tag, codes, onSaved, onDeleted, onError, onClose }) {
+  const [name, setName] = useState(tag.name);
+  const [picked, setPicked] = useState(() => new Set(tag.plaid_codes));
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  // Codes seen in your transactions, plus any already picked; Food & drink first since that's where most tags live.
+  const list = (codes || []).map(c => c.code);
+  for (const c of tag.plaid_codes) if (!list.includes(c)) list.push(c);
+  const rows = list.map(code => ({ code, ...pfcLabel(code), n: ((codes || []).find(c => c.code === code) || {}).n || 0 }))
+    .filter(r => showAll || picked.has(r.code) || r.n > 0)
+    .sort((a, b) => (picked.has(b.code) - picked.has(a.code)) || a.group.localeCompare(b.group) || b.n - a.n);
+  const toggle = (code) => setPicked(p => { const n = new Set(p); n.has(code) ? n.delete(code) : n.add(code); return n; });
+  async function save() {
+    setBusy(true);
+    try {
+      const r = await api('/api/tags/' + tag.id, { method: 'PATCH', body: JSON.stringify({ name, plaid_codes: [...picked] }) });
+      onSaved(name + ' saved — ' + r.tagged + ' transaction' + (r.tagged === 1 ? ' has' : 's have') + ' this tag.');
+    } catch (e) { if (!(e instanceof AuthError)) onError(e.message); }
+    finally { setBusy(false); }
+  }
+  async function remove() {
+    setBusy(true);
+    try { await api('/api/tags/' + tag.id, { method: 'DELETE' }); onDeleted(tag.name + ' deleted and removed from every transaction.'); }
+    catch (e) { if (!(e instanceof AuthError)) onError(e.message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="editor" style={{ marginTop: 10 }}>
+      <label>Name <input type="text" value={name} maxLength={30} onChange={e => setName(e.target.value)} /></label>
+      <div>
+        <div className="acct-meta muted" style={{ marginBottom: 6 }}>Tag automatically when Plaid says…</div>
+        {codes === null ? <div className="spinner" style={{ margin: '8px 0' }} /> : rows.length === 0
+          ? <div className="muted acct-meta">No Plaid codes yet — this tag will only come from rules and your own picks.</div>
+          : <div className="code-list">
+              {rows.map(r => (
+                <label key={r.code}>
+                  <input type="checkbox" checked={picked.has(r.code)} onChange={() => toggle(r.code)} />
+                  <span>{r.name}{r.group && <span className="muted"> · {r.group}</span>}</span>
+                  <span className="muted">{r.n || ''}</span>
+                </label>
+              ))}
+            </div>}
+        <p className="muted acct-meta" style={{ margin: '6px 0 0' }}>
+          Numbers are how many of your transactions Plaid gave that code. Saving re-tags all your history; tags you added or removed by hand stay as you set them.
+          For things Plaid can’t tell apart (like Date Night), tag by hand or make a rule.
+        </p>
+      </div>
+      <div className="btn-row">
+        <button className="btn-primary btn-inline" disabled={busy || !name.trim()} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        <button className="btn-text" onClick={onClose}>Close</button>
+        {!confirmDelete
+          ? <button className="btn-text" disabled={busy} onClick={() => setConfirmDelete(true)} style={{ marginLeft: 'auto' }}>Delete tag</button>
+          : <span style={{ marginLeft: 'auto' }}>Remove {tag.name} from every transaction? <button className="btn-text" style={{ color: 'var(--red)' }} disabled={busy} onClick={remove}>Yes, delete</button><button className="btn-text" onClick={() => setConfirmDelete(false)}>No</button></span>}
+      </div>
+    </div>
+  );
+}
+
+function TagsManager() {
+  const [tags, reloadTags] = useTags();
+  const [open, setOpen] = useState(null);
+  const [codes, setCodes] = useState(null);
+  const [adding, setAdding] = useState(null);
+  const [notice, setNotice] = useState(null);
+  useEffect(() => { reloadTags(); }, [reloadTags]);
+  useEffect(() => {
+    if (!open || codes) return;
+    api('/api/tags/plaid-codes').then(r => setCodes(r.codes)).catch(e => { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); });
+  }, [open, codes]);
+  async function add() {
+    if (!adding || !adding.trim()) return;
+    try {
+      const r = await api('/api/tags', { method: 'POST', body: JSON.stringify({ name: adding.trim() }) });
+      await reloadTags(); setAdding(null); setOpen(r.id);
+      setNotice({ kind: 'ok', text: 'Added ' + adding.trim() + '. Pick the Plaid codes that should tag it automatically, or leave them empty for a hand-picked tag.' });
+    } catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
+  }
+  const current = tags.find(g => g.id === open);
+  return (
+    <div className="card">
+      <h1>Tags</h1>
+      <p className="muted acct-meta">A transaction has one category and any number of tags. Reports list each category’s tags under it. Click a tag to rename it or choose which Plaid codes tag it automatically.</p>
+      {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
+      <div className="chips">
+        {tags.map(g => (
+          <button key={g.id} className={'chip' + (open === g.id ? ' editing' : '')} onClick={() => setOpen(open === g.id ? null : g.id)}>
+            {g.name}{g.plaid_codes.length ? <span className="muted" title="Tags automatically from Plaid">· auto</span> : null}
+          </button>
+        ))}
+        {adding === null
+          ? <button className="chip chip-add" onClick={() => setAdding('')}>+ Add</button>
+          : <span className="chip editing">
+              <input type="text" value={adding} autoFocus maxLength={30} placeholder="New tag" onChange={e => setAdding(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') add(); if (e.key === 'Escape') setAdding(null); }} />
+              <button className="btn-text" disabled={!adding.trim()} onClick={add}>Add</button>
+            </span>}
+      </div>
+      {current && <TagEditor key={current.id} tag={current} codes={codes}
+        onSaved={async (m) => { setNotice({ kind: 'ok', text: m }); await reloadTags(); }}
+        onDeleted={async (m) => { setNotice({ kind: 'ok', text: m }); setOpen(null); await reloadTags(); }}
+        onError={(m) => setNotice({ kind: 'err', text: m })} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
 function CategoriesAndRules() {
   const [cats, reloadCats] = useCategories();
+  const [tags] = useTags();
   const [rules, setRules] = useState([]);
   const [notice, setNotice] = useState(null);
   const [adding, setAdding] = useState(null);       // parent id
   const [newName, setNewName] = useState('');
   const [editing, setEditing] = useState(null);     // { id, name }
-  const [ruleForm, setRuleForm] = useState({ value: '', op: 'contains', category_id: '' });
+  const [ruleForm, setRuleForm] = useState({ value: '', op: 'contains', category_id: '', tag_id: '' });
   const [busy, setBusy] = useState(false);
 
   const loadRules = useCallback(async () => {
     try { setRules((await api('/api/rules')).rules); }
     catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: e.message }); }
   }, []);
+  useEffect(() => { if (_tagCache) loadRules(); }, [tags, loadRules]);   // deleting a tag can change rules
   useEffect(() => { loadRules(); reloadCats(); }, [loadRules, reloadCats]);
   const run = async (fn, okText) => {
     setBusy(true);
@@ -1589,21 +1866,21 @@ function CategoriesAndRules() {
           <h1 style={{ margin: 0 }}>Rules</h1>
           <button className="btn-secondary" disabled={busy} onClick={() => run(async () => {
             const r = await api('/api/categorize/rerun', { method: 'POST' });
-            setNotice({ kind: 'ok', text: 'Re-applied rules and Plaid categories to all history. ' + r.uncategorized + ' transaction' + (r.uncategorized === 1 ? '' : 's') + ' left uncategorized.' });
+            setNotice({ kind: 'ok', text: 'Re-applied rules, Plaid categories and automatic tags to all history. ' + r.uncategorized + ' transaction' + (r.uncategorized === 1 ? '' : 's') + ' left uncategorized.' });
           })}>Re-apply to all history</button>
         </div>
-        <p className="muted acct-meta">Rules run before Plaid’s guess and never override a category you set by hand. The first matching rule wins.</p>
+        <p className="muted acct-meta">Rules run before Plaid’s guess and never override a category you set by hand. The first matching rule sets the category; every matching rule adds its tag.</p>
         {rules.length === 0 && <div className="muted acct-meta">No rules yet. Pick a category on any transaction and Finance Pal will offer to make one.</div>}
         {rules.map(r => (
           <div key={r.id} className="acct-row">
             <div className="acct-main">
-              <div>Text {r.op === 'equals' ? 'is' : r.op === 'starts_with' ? 'starts with' : 'contains'} “<b>{r.value}</b>” → <b>{r.category_name}</b></div>
+              <div>Text {r.op === 'equals' ? 'is' : r.op === 'starts_with' ? 'starts with' : 'contains'} “<b>{r.value}</b>” → {r.category_name && <b>{r.category_name}</b>}{r.category_name && r.tag_name ? ' + ' : ''}{r.tag_name && <span className="tag-chip">{r.tag_name}</span>}</div>
               {r.account_name && <div className="acct-meta muted">only on {r.account_name}</div>}
             </div>
             <button className="btn-text" disabled={busy} onClick={() => run(() => api('/api/rules/' + r.id, { method: 'DELETE' }), 'Rule deleted. Use “Re-apply to all history” to undo its effect on past transactions.')}>Delete</button>
           </div>
         ))}
-        <form className="inline-form" onSubmit={e => { e.preventDefault(); run(() => api('/api/rules', { method: 'POST', body: JSON.stringify(ruleForm) }), 'Rule added and applied to history.').then(() => setRuleForm({ value: '', op: 'contains', category_id: '' })); }}>
+        <form className="inline-form" onSubmit={e => { e.preventDefault(); run(() => api('/api/rules', { method: 'POST', body: JSON.stringify({ ...ruleForm, category_id: ruleForm.category_id || null, tag_id: ruleForm.tag_id || null }) }), 'Rule added and applied to history.').then(() => setRuleForm({ value: '', op: 'contains', category_id: '', tag_id: '' })); }}>
           <label>When text
             <select value={ruleForm.op} onChange={e => setRuleForm(f => ({ ...f, op: e.target.value }))}>
               <option value="contains">contains</option><option value="starts_with">starts with</option><option value="equals">is exactly</option>
@@ -1611,7 +1888,8 @@ function CategoriesAndRules() {
           </label>
           <label>Text<input type="text" value={ruleForm.value} placeholder="e.g. pacific gardens" onChange={e => setRuleForm(f => ({ ...f, value: e.target.value }))} /></label>
           <label>Category<CategorySelect cats={cats} value={ruleForm.category_id} onChange={v => setRuleForm(f => ({ ...f, category_id: v || '' }))} includeUncat={false} /></label>
-          <button className="btn-secondary" disabled={busy || !ruleForm.value.trim() || !ruleForm.category_id}>Add rule</button>
+          <label>Tag<TagSelect tags={tags} value={ruleForm.tag_id} onChange={v => setRuleForm(f => ({ ...f, tag_id: v }))} placeholder="No tag" /></label>
+          <button className="btn-secondary" disabled={busy || !ruleForm.value.trim() || (!ruleForm.category_id && !ruleForm.tag_id)}>Add rule</button>
         </form>
       </div>
     </>
@@ -2401,7 +2679,7 @@ function App() {
 
       <main>
         {me && tab === 'dashboard' && <SetupStatus me={me} />}
-        {me && tab === 'settings' && <><Connections onChanged={refreshMe} /><CategoriesAndRules /></>}
+        {me && tab === 'settings' && <><Connections onChanged={refreshMe} /><CategoriesAndRules /><TagsManager /></>}
         {me && tab === 'accounts' && <AccountsView />}
         {me && tab === 'plan' && <PlanView />}
         {me && tab === 'expenses' && <ExpensesView />}

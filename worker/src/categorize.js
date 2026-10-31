@@ -8,10 +8,14 @@
 //   4. auto        — matching in/out pair between two of your accounts → Transfers
 //   5. none        — Uncategorized
 // is_transfer / is_income always follow the chosen category's kind.
+//
+// Tags (v0.10.0) ride along in the same batch. They are additive — a transaction can have many —
+// and come from your rules (any rule with a tag) and Plaid's code (plaid_tag_map). Tags you add by
+// hand are 'manual'; tags you remove become 'off' so automatic tagging never puts them back.
 
 const SEED = [
   ['Home', 'expense', ['Mortgage', 'HOA', 'Utilities', 'Home & Repairs']],
-  ['Food', 'expense', ['Groceries', 'Dining Out', 'Coffee']],
+  ['Food', 'expense', ['Groceries', 'Dining Out']],
   ['Getting around', 'expense', ['Gas', 'Car', 'Parking & Rideshare']],
   ['Fun', 'expense', ['Comedy', 'Entertainment', 'Travel']],
   ['Personal', 'expense', ['Clothes', 'Health & Fitness', 'Personal Care', 'Gifts']],
@@ -33,7 +37,7 @@ const PLAID_DEFAULTS = {
   TRANSFER_IN_INVESTMENT_AND_RETIREMENT_FUNDS: 'Investments', TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS: 'Investments',
   LOAN_PAYMENTS_CREDIT_CARD_PAYMENT: 'Card Payments', LOAN_PAYMENTS_MORTGAGE_PAYMENT: 'Mortgage',
   LOAN_PAYMENTS_CAR_PAYMENT: 'Car',
-  FOOD_AND_DRINK_GROCERIES: 'Groceries', FOOD_AND_DRINK_COFFEE: 'Coffee',
+  FOOD_AND_DRINK_GROCERIES: 'Groceries', GENERAL_MERCHANDISE_CONVENIENCE_STORES: 'Dining Out',
   TRANSPORTATION_GAS: 'Gas', TRANSPORTATION_PARKING: 'Parking & Rideshare',
   TRANSPORTATION_TAXIS_AND_RIDE_SHARES: 'Parking & Rideshare', TRANSPORTATION_PUBLIC_TRANSIT: 'Parking & Rideshare',
   TRANSPORTATION_TOLLS: 'Parking & Rideshare',
@@ -42,6 +46,15 @@ const PLAID_DEFAULTS = {
   GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES: 'Clothes', GENERAL_MERCHANDISE_GIFTS_AND_NOVELTIES: 'Gifts',
   GENERAL_SERVICES_INSURANCE: 'Insurance', GENERAL_SERVICES_AUTOMOTIVE: 'Car',
   GOVERNMENT_AND_NON_PROFIT_DONATIONS: 'Gifts', PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS: 'Health & Fitness',
+};
+
+// Starter tags and the Plaid codes that feed them. Editable in Settings → Tags.
+const TAG_SEED = ['Coffee', 'Restaurant', 'Fast Food', 'Convenience Store', 'Date Night'];
+const PLAID_TAG_DEFAULTS = {
+  FOOD_AND_DRINK_COFFEE: 'Coffee',
+  FOOD_AND_DRINK_RESTAURANT: 'Restaurant',
+  FOOD_AND_DRINK_FAST_FOOD: 'Fast Food',
+  GENERAL_MERCHANDISE_CONVENIENCE_STORES: 'Convenience Store',
 };
 
 // All transactions on accounts belonging to anyone in the household.
@@ -70,6 +83,101 @@ export async function ensureCategories(env, householdId) {
   }
   await env.DB.batch(stmts);
   return true;
+}
+
+// One-time per household (v0.10.0): starter tags, their Plaid codes, and the move from the old
+// Coffee category to Dining Out + a Coffee tag (transactions, rules, Plaid map, buckets, expenses),
+// convenience stores → Dining Out, then tags applied to all history. Claims the household first
+// so two requests can't both run it.
+export async function ensureTags(env, householdId) {
+  const hh = await env.DB.prepare('SELECT tags_seeded FROM households WHERE id = ?').bind(householdId).first();
+  if (!hh || hh.tags_seeded) return false;
+  const claim = await env.DB.prepare('UPDATE households SET tags_seeded = 1 WHERE id = ? AND tags_seeded = 0').bind(householdId).run();
+  if (!claim.meta || !claim.meta.changes) return false;
+  try {
+    const now = Date.now();
+    const stmts = TAG_SEED.map((name, i) => env.DB.prepare(
+      'INSERT OR IGNORE INTO tags (id, household_id, name, sort, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), householdId, name, i, now));
+    for (const [code, name] of Object.entries(PLAID_TAG_DEFAULTS)) {
+      stmts.push(env.DB.prepare(
+        `INSERT OR IGNORE INTO plaid_tag_map (household_id, pfc_detailed, tag_id)
+         SELECT ?, ?, id FROM tags WHERE household_id = ? AND name = ?`
+      ).bind(householdId, code, householdId, name));
+    }
+    const cat = (name) => env.DB.prepare(
+      'SELECT id FROM categories WHERE household_id = ? AND name = ? AND parent_id IS NOT NULL ORDER BY archived, sort LIMIT 1'
+    ).bind(householdId, name).first();
+    const dining = await cat('Dining Out');
+    const coffee = await cat('Coffee');
+    const coffeeTag = `(SELECT id FROM tags WHERE household_id = ? AND name = 'Coffee')`;
+    if (dining && coffee) {
+      stmts.push(
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id, source)
+           SELECT t.id, ${coffeeTag}, CASE t.category_source WHEN 'manual' THEN 'manual' WHEN 'rule' THEN 'rule' ELSE 'plaid' END
+             FROM transactions t WHERE t.category_id = ?`
+        ).bind(householdId, coffee.id),
+        env.DB.prepare('UPDATE transactions SET category_id = ? WHERE category_id = ?').bind(dining.id, coffee.id),
+        env.DB.prepare(`UPDATE category_rules SET category_id = ?, tag_id = ${coffeeTag} WHERE household_id = ? AND category_id = ?`)
+          .bind(dining.id, householdId, householdId, coffee.id),
+        env.DB.prepare('UPDATE plaid_category_map SET category_id = ? WHERE household_id = ? AND category_id = ?').bind(dining.id, householdId, coffee.id),
+        env.DB.prepare('UPDATE buckets SET category_id = ? WHERE category_id = ?').bind(dining.id, coffee.id),
+        env.DB.prepare('UPDATE expenses SET category_id = ? WHERE category_id = ?').bind(dining.id, coffee.id),
+        env.DB.prepare('UPDATE categories SET archived = 1 WHERE id = ?').bind(coffee.id),
+      );
+    }
+    if (dining) {
+      // Convenience stores count as Dining Out (Plaid-guessed ones only; rules and your picks stay).
+      stmts.push(
+        env.DB.prepare(`INSERT OR IGNORE INTO plaid_category_map (household_id, pfc_detailed, category_id) VALUES (?, 'GENERAL_MERCHANDISE_CONVENIENCE_STORES', ?)`)
+          .bind(householdId, dining.id),
+        env.DB.prepare(
+          `UPDATE transactions SET category_id = ? WHERE category_source = 'plaid' AND pfc_detailed = 'GENERAL_MERCHANDISE_CONVENIENCE_STORES'
+              AND account_id IN (${HH_ACCOUNTS})`
+        ).bind(dining.id, householdId),
+      );
+    }
+    await env.DB.batch(stmts);
+    const rules = (await env.DB.prepare('SELECT * FROM category_rules WHERE household_id = ? AND enabled = 1 AND tag_id IS NOT NULL')
+      .bind(householdId).all()).results;
+    await env.DB.batch(tagStatements(env, householdId, rules, {}));
+  } catch (e) {
+    await env.DB.prepare('UPDATE households SET tags_seeded = 0 WHERE id = ?').bind(householdId).run();
+    throw e;
+  }
+  return true;
+}
+
+// Statements that add automatic tags (never touching 'manual' or 'off' rows).
+//   sinceDays — only transactions posted in the last N days (routine syncs); omit for all history
+//   tagId     — only this tag
+//   reset     — first drop automatic tags in scope, so changed mappings/rules take effect
+export function tagStatements(env, householdId, rules, { sinceDays = null, tagId = null, reset = false } = {}) {
+  const stmts = [];
+  const win = sinceDays ? ` AND date >= date('now', '-${Number(sinceDays)} days')` : '';
+  if (reset) {
+    stmts.push(env.DB.prepare(
+      `DELETE FROM transaction_tags WHERE source IN ('plaid', 'rule')${tagId ? ' AND tag_id = ?' : ''}
+          AND transaction_id IN (SELECT id FROM transactions WHERE account_id IN (${HH_ACCOUNTS}))`
+    ).bind(...(tagId ? [tagId] : []), householdId));
+  }
+  stmts.push(env.DB.prepare(
+    `INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id, source)
+     SELECT t.id, m.tag_id, 'plaid' FROM transactions t
+       JOIN plaid_tag_map m ON m.household_id = ? AND (m.pfc_detailed = t.pfc_detailed OR m.pfc_detailed = 'P:' || t.pfc_primary)
+      WHERE t.account_id IN (${HH_ACCOUNTS}) AND t.removed = 0${win.replace('date', 't.date')}${tagId ? ' AND m.tag_id = ?' : ''}`
+  ).bind(householdId, householdId, ...(tagId ? [tagId] : [])));
+  for (const r of rules) {
+    if (!r.tag_id || (tagId && r.tag_id !== tagId)) continue;
+    const w = ruleWhere(r);
+    stmts.push(env.DB.prepare(
+      `INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id, source)
+       SELECT id, ?, 'rule' FROM transactions
+        WHERE account_id IN (${HH_ACCOUNTS}) AND removed = 0${win} AND ${w.sql}`
+    ).bind(r.tag_id, householdId, ...w.params));
+  }
+  return stmts;
 }
 
 // SQL condition + params for one rule against table alias-less `transactions`.
@@ -119,6 +227,7 @@ function flagStatements(env, householdId) {
 //   reset      — clear everything except manual choices first ("Re-apply to all history")
 export async function categorize(env, householdId, { reset = false, windowDays = 10 } = {}) {
   await ensureCategories(env, householdId);
+  await ensureTags(env, householdId);
   const rules = (await env.DB.prepare(
     'SELECT * FROM category_rules WHERE household_id = ? AND enabled = 1 ORDER BY priority, created_at'
   ).bind(householdId).all()).results;
@@ -184,11 +293,15 @@ export async function categorize(env, householdId, { reset = false, windowDays =
     ).bind(transfersId, `-${windowDays} days`, householdId, householdId));
   }
   if (reset) stmts.push(...flagStatements(env, householdId));
+  // 4. Tags: all history on a reset (automatic tags rebuilt), else just the routine window.
+  stmts.push(...tagStatements(env, householdId, rules, reset ? { reset: true } : { sinceDays: windowDays }));
   await env.DB.batch(stmts);
 }
 
 // Apply ONE rule to all history (overrides plaid/auto/other-rule choices, never manual).
 export async function applyRuleToHistory(env, householdId, rule) {
+  if (rule.tag_id) await env.DB.batch(tagStatements(env, householdId, [rule], {}));
+  if (!rule.category_id) return;
   const w = ruleWhere(rule);
   await env.DB.prepare(
     `UPDATE transactions SET category_id = ?, category_source = 'rule',
