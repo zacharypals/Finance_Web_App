@@ -312,3 +312,28 @@ export async function reportSummary(env, user, q) {
     by_category_tag: byTag.results, by_category_untagged: untagged.results,
   });
 }
+
+// Spending by month for one category (v0.11.0) — the Reports chart's category picker.
+// `category` = a category id (a parent group includes its subcategories) or 'uncategorized'.
+// Same 12-month eff_date range as the summary's overall trend, so it reads no more rows than that.
+export async function reportTrend(env, user, q) {
+  const to = q.get('to'), cat = q.get('category') || '';
+  if (!DATE_RE.test(to || '') || !cat) return json({ error: 'bad_request', message: 'to (YYYY-MM-DD) and category are required' }, 400);
+  await ensureReady(env, user.household_id);
+  const base = [user.id, user.household_id];
+  let catSql, catArgs;
+  if (cat === 'uncategorized') {
+    catSql = 't.category_id IS NULL'; catArgs = [];
+  } else {
+    const c = await env.DB.prepare('SELECT id FROM categories WHERE id = ? AND household_id = ?').bind(cat, user.household_id).first();
+    if (!c) return json({ error: 'not_found', message: 'Category not found' }, 404);
+    catSql = '(t.category_id = ? OR c.parent_id = ?)'; catArgs = [cat, cat];
+  }
+  const { results } = await env.DB.prepare(
+    `SELECT substr(t.eff_date, 1, 7) AS month, COALESCE(SUM(t.amount), 0) AS spending
+       ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ?
+        AND t.is_transfer = 0 AND t.is_income = 0 AND ${catSql}
+      GROUP BY month ORDER BY month`
+  ).bind(...base, monthsBack(to, 12), to, ...catArgs).all();
+  return json({ to, category: cat, months: results });
+}

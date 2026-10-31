@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.10.1 -->
+<!-- Finance Pal v0.11.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -184,21 +184,48 @@ input[type=text], input[type=date], input[type=number], select {
 .rep-bar { height: 10px; background: var(--bg); border-radius: 4px; overflow: hidden; }
 .rep-bar span { display: block; height: 100%; background: var(--chart-line); border-radius: 0 4px 4px 0; }
 .rep-child .rep-bar span { opacity: .55; }
-.month-bars { display: flex; align-items: flex-end; gap: 6px; height: 180px; padding-top: 8px; }
+.mchart-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.mchart-head h2 { margin: 0; }
+.mchart-head select { max-width: 220px; font-size: 13px; padding: 6px 8px; }
+.mchart { display: flex; gap: 6px; }
+.mchart-axis { position: relative; width: 38px; flex: none; height: 180px; font-size: 10px; color: var(--ink-light); }
+.mchart-axis span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
+.mchart-plot { position: relative; flex: 1; min-width: 0; }
+.mchart-grid { position: absolute; inset: 0; pointer-events: none; }
+.mchart-grid i { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--chart-grid); }
+.mchart-grid i.base { border-top: 1px solid var(--border); }
+.month-bars { position: relative; display: flex; align-items: flex-end; gap: 6px; height: 180px; padding-top: 8px; }
+.mbar-seg { position: absolute; left: 0; right: 0; }
+.mbar-seg.top { border-radius: 4px 4px 0 0; }
+.mbar-seg.inc { background: var(--chart-line); opacity: .22; border-radius: 4px 4px 0 0; }
+.mbar-seg.ok { background: var(--chart-line); }
+.mbar-seg.over { background: var(--red); }
+.mbar-seg.cat { background: var(--chart-line); }
+.mchart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-light); margin-top: 10px; }
+.mchart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.mchart-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.mchart-legend i.ok { background: var(--chart-line); }
+.mchart-legend i.over { background: var(--red); }
+.mchart-legend i.inc { background: var(--chart-line); opacity: .22; }
 .mbar { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; height: 100%; position: relative; cursor: pointer;
   background: none; border: 0; padding: 0; font: inherit; color: inherit; }
 .mbar:focus-visible { outline: 2px solid var(--chart-line); outline-offset: 2px; border-radius: 4px; }
-.month-bars.has-sel .mbar:not(.sel) .mbar-fill { opacity: .55; }
+.mbar.sel { background: var(--accent-light); border-radius: 6px; }
 .mbar.sel { cursor: default; }
 .mbar.sel .mbar-label { color: var(--ink); font-weight: 600; }
-.mbar-track { flex: 1; width: 100%; max-width: 44px; display: flex; align-items: flex-end; }
-.mbar-fill { width: 100%; background: var(--chart-line); border-radius: 4px 4px 0 0; min-height: 2px; }
-.mbar-label { font-size: 11px; color: var(--ink-light); margin-top: 4px; }
-.mbar:hover .mbar-fill { filter: brightness(1.15); }
+.mbar-track { flex: 1; width: 100%; max-width: 44px; position: relative; }
+.mbar-label { font-size: 11px; line-height: 14px; height: 14px; color: var(--ink-light); margin-top: 4px; }
+.mbar:hover .mbar-track { filter: brightness(1.15); }
 .mbar[data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); white-space: nowrap;
   background: var(--ink); color: var(--paper); font-size: 12px; padding: 6px 8px; border-radius: 6px; z-index: 5; pointer-events: none; }
 .mbar:nth-child(-n+3)[data-tip]:hover::after { left: 0; transform: none; }
 .mbar:nth-last-child(-n+4)[data-tip]:hover::after { left: auto; right: 0; transform: none; }
+@media (max-width: 600px) {
+  /* Phone: tooltips sit centered over the chart (anchored to .month-bars) and wrap, so they never clip. */
+  .mbar { position: static; }
+  .mbar[data-tip]:hover::after, .mbar:nth-child(-n+3)[data-tip]:hover::after, .mbar:nth-last-child(-n+4)[data-tip]:hover::after {
+    left: 50%; right: auto; transform: translateX(-50%); white-space: normal; width: max-content; max-width: 100%; text-align: center; }
+}
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip { background: var(--bg); border: 1px solid var(--border); color: var(--ink); border-radius: 999px; padding: 5px 12px; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
 .chip:hover { border-color: var(--accent); }
@@ -334,7 +361,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.10.1';
+const APP_VERSION = '0.11.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1612,6 +1639,133 @@ function CategoryBreakdown({ title, rows, emptyText, note, range, onDrill, tagRo
   );
 }
 
+// Rounds a chart maximum up to a friendly number so the top and halfway lines read cleanly.
+function niceCeil(v) {
+  if (v <= 0) return 100;
+  const e = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * e >= v) return m * e;
+  return 10 * e;
+}
+// Short axis labels: $6k, $1.5k, $750 (cents in).
+function fmtAxis(cents) {
+  const d = Math.round(cents / 100);
+  if (Math.abs(d) >= 1000) return '$' + String(Math.round(d / 100) / 10).replace(/\.0$/, '') + 'k';
+  return '$' + d;
+}
+const TREND_CAT_KEY = 'fp_rep_trend_cat';
+
+// Spending by month (v0.11.0). Overall: each bar is spending, green up to that month's income and red
+// above it; a faint green column shows income left unspent. With a category picked, bars show that
+// category's spending. Bars are buttons that jump the report to their month (v0.10.1).
+function MonthChart({ months, trendTo, selMonth, onPick }) {
+  const [cats] = useCategories();
+  const [catId, setCatId] = useState(() => lsGet(TREND_CAT_KEY) || '');
+  const [catMonths, setCatMonths] = useState(null);
+  const [catErr, setCatErr] = useState(null);
+
+  // Spending categories for the picker: each group, then its subcategories.
+  const live = cats.filter(c => !c.archived && c.kind === 'expense');
+  const parents = live.filter(c => !c.parent_id);
+  const childrenOf = id => live.filter(c => c.parent_id === id);
+  const catName = catId === 'uncategorized' ? 'Uncategorized' : ((live.find(c => c.id === catId) || {}).name || '');
+  // A saved pick that has since been archived or deleted falls back to overall (once categories load).
+  const activeCat = catId && (catId === 'uncategorized' || cats.length === 0 || catName) ? catId : '';
+
+  const pickCat = v => { setCatId(v); if (v) lsSet(TREND_CAT_KEY, v); else lsDel(TREND_CAT_KEY); };
+
+  useEffect(() => {
+    if (!activeCat) { setCatMonths(null); setCatErr(null); return; }
+    let on = true;
+    setCatMonths(null);
+    api('/api/reports/trend?to=' + trendTo + '&category=' + encodeURIComponent(activeCat))
+      .then(r => { if (on) { setCatMonths(r.months); setCatErr(null); } })
+      .catch(e => { if (on && !(e instanceof AuthError)) setCatErr(e.message); });
+    return () => { on = false; };
+  }, [activeCat, trendTo]);
+
+  const catMode = !!activeCat;
+  const catMap = {};
+  (catMonths || []).forEach(m => { catMap[m.month] = m.spending; });
+  const rows = months.map(m => catMode
+    ? { month: m.month, spending: Math.max(0, catMap[m.month] || 0) }
+    : { month: m.month, spending: Math.max(0, m.spending), income: Math.max(0, m.income) });
+  const top = niceCeil(Math.max(0, ...rows.map(r => Math.max(r.spending, r.income || 0))));
+  const pct = v => v / top * 100 + '%';
+  const short = ym => parseIso(ym + '-01').toLocaleDateString('en-US', { month: 'short' });
+  const tipFor = r => {
+    const name = monthLabel(r.month).replace(' 1', '');
+    if (catMode) return name + ' · ' + catName + ': ' + fmtCents(r.spending);
+    const net = r.income - r.spending;
+    return name + ': spent ' + fmtCents(r.spending) + ' · income ' + fmtCents(r.income) + ' · ' + (net >= 0 ? '+' : '−') + fmtCents(Math.abs(net));
+  };
+  const plotTop = '8px', mid = 'calc(8px + (100% - 26px) / 2)', base = 'calc(100% - 18px)';
+
+  return (
+    <div className="card">
+      <div className="mchart-head">
+        <h2>{catMode ? catName + ' by month' : 'Spending by month'}</h2>
+        <select aria-label="Category for the monthly chart" value={activeCat} onChange={e => pickCat(e.target.value)}>
+          <option value="">All spending (vs income)</option>
+          {parents.map(p => (
+            <optgroup key={p.id} label={p.name}>
+              <option value={p.id}>All {p.name}</option>
+              {childrenOf(p.id).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </optgroup>
+          ))}
+          <option value="uncategorized">Uncategorized</option>
+        </select>
+      </div>
+      {catErr && <div className="error-box">{catErr}</div>}
+      {catMode && !catMonths && !catErr ? <div className="spinner" style={{ margin: '70px auto' }} /> : (
+        <div className="mchart">
+          <div className="mchart-axis" aria-hidden="true">
+            <span style={{ top: plotTop }}>{fmtAxis(top)}</span>
+            <span style={{ top: mid }}>{fmtAxis(top / 2)}</span>
+            <span style={{ top: base }}>$0</span>
+          </div>
+          <div className="mchart-plot">
+            <div className="mchart-grid" aria-hidden="true">
+              <i style={{ top: plotTop }} /><i style={{ top: mid }} /><i className="base" style={{ top: base }} />
+            </div>
+            <div className="month-bars" role="group" aria-label={(catMode ? catName : 'Monthly spending') + ', last 12 months — choose a month to view it'}>
+              {rows.map(r => {
+                const sel = selMonth === r.month;
+                const tip = tipFor(r);
+                const ok = catMode ? 0 : Math.min(r.spending, r.income);
+                const over = catMode ? 0 : r.spending - ok;
+                return (
+                  <button type="button" key={r.month} className={'mbar' + (sel ? ' sel' : '')} data-tip={tip} aria-label={tip} aria-pressed={sel}
+                    onClick={() => { if (!sel) onPick(r.month); }}>
+                    <div className="mbar-track">
+                      {catMode ? (
+                        <div className="mbar-seg cat top" style={{ bottom: 0, height: pct(r.spending), minHeight: r.spending > 0 ? 2 : 0 }} />
+                      ) : <>
+                        {r.income > r.spending && <div className="mbar-seg inc" style={{ bottom: 0, height: pct(r.income) }} />}
+                        {ok > 0 && <div className={'mbar-seg ok' + (over > 0 ? '' : ' top')} style={{ bottom: 0, height: pct(ok) }} />}
+                        {over > 0 && <div className="mbar-seg over top" style={{ bottom: pct(ok), height: pct(over), minHeight: 2 }} />}
+                      </>}
+                    </div>
+                    <div className="mbar-label">{short(r.month)}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+      {!catMode && (
+        <div className="mchart-legend">
+          <span><i className="ok" />Spending covered by income</span>
+          <span><i className="over" />Spending over income</span>
+          <span><i className="inc" />Income not spent</span>
+        </div>
+      )}
+      {months.length < 2 ? <p className="muted acct-meta">This fills in as more months of history load.</p>
+        : <p className="muted acct-meta" style={{ marginBottom: 0 }}>Click a month to see its report.</p>}
+    </div>
+  );
+}
+
 function ReportsView({ onDrill }) {
   const [kind, setKind] = useState('month');
   const [offset, setOffset] = useState(0);
@@ -1638,8 +1792,6 @@ function ReportsView({ onDrill }) {
       .catch(e => { if (live && !(e instanceof AuthError)) setErr(e.message); });
     return () => { live = false; };
   }, [range.from, range.to, trendTo]);
-
-  const maxMonth = data ? Math.max(1, ...data.months.map(m => m.spending)) : 1;
 
   return (
     <>
@@ -1685,24 +1837,7 @@ function ReportsView({ onDrill }) {
         <CategoryBreakdown title="Income by category" rows={data.income_by_category || []} emptyText="No income in this period." range={range} onDrill={onDrill}
           note="Deposits categorized as Income. A refund or reimbursement shows here only if you categorize it as income." />
 
-        <div className="card">
-          <h2>Spending by month</h2>
-          <div className={'month-bars' + (kind === 'month' ? ' has-sel' : '')} role="group" aria-label="Monthly spending, last 12 months — choose a month to view it">
-            {data.months.map(m => {
-              const sel = kind === 'month' && range.from.slice(0, 7) === m.month;
-              const tip = monthLabel(m.month).replace(' 1', '') + ': spent ' + fmtCents(m.spending) + ' · income ' + fmtCents(m.income);
-              return (
-                <button type="button" key={m.month} className={'mbar' + (sel ? ' sel' : '')} data-tip={tip} aria-label={tip} aria-pressed={sel}
-                  onClick={() => { if (!sel) pickMonth(m.month); }}>
-                  <div className="mbar-track"><div className="mbar-fill" style={{ height: Math.max(0, m.spending) / maxMonth * 100 + '%' }} /></div>
-                  <div className="mbar-label">{parseIso(m.month + '-01').toLocaleDateString('en-US', { month: 'short' })}</div>
-                </button>
-              );
-            })}
-          </div>
-          {data.months.length >= 2 && <p className="muted acct-meta" style={{ marginBottom: 0 }}>Click a month to see its report.</p>}
-          {data.months.length < 2 && <p className="muted acct-meta">This fills in as more months of history load.</p>}
-        </div>
+        <MonthChart months={data.months} trendTo={trendTo} selMonth={kind === 'month' ? range.from.slice(0, 7) : null} onPick={pickMonth} />
 
         <div className="card">
           <h2>Top merchants</h2>

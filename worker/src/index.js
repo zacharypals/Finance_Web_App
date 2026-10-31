@@ -20,7 +20,7 @@ import { listAccounts, patchAccounts, putManualBalance, deleteManualBalance, mon
 
 import {
   listCategories, createCategory, patchCategory, listTransactions, patchTransactions, resetTransaction,
-  listRules, createRule, deleteRule, rerunCategorization, reportSummary,
+  listRules, createRule, deleteRule, rerunCategorization, reportSummary, reportTrend,
 } from './transactions.js';
 
 import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell, putPaycheck, refreshCards } from './plan.js';
@@ -28,7 +28,7 @@ import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBu
 import { listTags, createTag, patchTag, deleteTag, plaidCodes } from './tags.js';
 import { listExpenses, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
 
-const WORKER_VERSION = '0.10.1';
+const WORKER_VERSION = '0.11.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -122,6 +122,7 @@ async function routeApi(req, env, ctx, url, user) {
   if (gm && method === 'PATCH') return patchTag(env, user, gm[1], await body());
   if (gm && method === 'DELETE') return deleteTag(env, user, gm[1]);
   if (path === '/api/reports/summary' && method === 'GET') return reportSummary(env, user, url.searchParams);
+  if (path === '/api/reports/trend' && method === 'GET') return reportTrend(env, user, url.searchParams);
 
   // Expenses
   if (path === '/api/expenses' && method === 'GET') return listExpenses(env, user);
