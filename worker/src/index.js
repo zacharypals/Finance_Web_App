@@ -28,7 +28,7 @@ import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBu
 import { listTags, createTag, patchTag, deleteTag, plaidCodes } from './tags.js';
 import { listExpenses, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
 
-const WORKER_VERSION = '0.10.0';
+const WORKER_VERSION = '0.10.1';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 

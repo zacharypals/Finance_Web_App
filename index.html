@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.10.0 -->
+<!-- Finance Pal v0.10.1 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -185,15 +185,20 @@ input[type=text], input[type=date], input[type=number], select {
 .rep-bar span { display: block; height: 100%; background: var(--chart-line); border-radius: 0 4px 4px 0; }
 .rep-child .rep-bar span { opacity: .55; }
 .month-bars { display: flex; align-items: flex-end; gap: 6px; height: 180px; padding-top: 8px; }
-.mbar { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; position: relative; cursor: default; }
+.mbar { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; height: 100%; position: relative; cursor: pointer;
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; }
+.mbar:focus-visible { outline: 2px solid var(--chart-line); outline-offset: 2px; border-radius: 4px; }
+.month-bars.has-sel .mbar:not(.sel) .mbar-fill { opacity: .55; }
+.mbar.sel { cursor: default; }
+.mbar.sel .mbar-label { color: var(--ink); font-weight: 600; }
 .mbar-track { flex: 1; width: 100%; max-width: 44px; display: flex; align-items: flex-end; }
 .mbar-fill { width: 100%; background: var(--chart-line); border-radius: 4px 4px 0 0; min-height: 2px; }
 .mbar-label { font-size: 11px; color: var(--ink-light); margin-top: 4px; }
 .mbar:hover .mbar-fill { filter: brightness(1.15); }
 .mbar[data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); white-space: nowrap;
   background: var(--ink); color: var(--paper); font-size: 12px; padding: 6px 8px; border-radius: 6px; z-index: 5; pointer-events: none; }
-.mbar:first-child[data-tip]:hover::after { left: 0; transform: none; }
-.mbar:last-child[data-tip]:hover::after { left: auto; right: 0; transform: none; }
+.mbar:nth-child(-n+3)[data-tip]:hover::after { left: 0; transform: none; }
+.mbar:nth-last-child(-n+4)[data-tip]:hover::after { left: auto; right: 0; transform: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip { background: var(--bg); border: 1px solid var(--border); color: var(--ink); border-radius: 999px; padding: 5px 12px; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
 .chip:hover { border-color: var(--accent); }
@@ -329,7 +334,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.10.1';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -1614,15 +1619,25 @@ function ReportsView({ onDrill }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const range = kind === 'custom' ? { ...custom, label: fmtDate(custom.from) + ' – ' + fmtDate(custom.to) } : periodRange(kind, offset);
+  // Keep the Spending-by-month chart on the latest 12 months while the period is inside them,
+  // so clicking a bar doesn't slide later months off; older periods anchor the chart on themselves.
+  const nowMonthEnd = periodRange('month', 0).to;
+  const trendTo = range.from >= periodRange('month', -11).from ? (range.to > nowMonthEnd ? range.to : nowMonthEnd) : range.to;
+  const pickMonth = ym => {
+    const [y, m] = ym.split('-').map(Number);
+    const now = new Date();
+    setKind('month');
+    setOffset((y - now.getFullYear()) * 12 + (m - 1 - now.getMonth()));
+  };
 
   useEffect(() => {
     let live = true;
     setData(null);
-    api('/api/reports/summary?from=' + range.from + '&to=' + range.to)
+    api('/api/reports/summary?from=' + range.from + '&to=' + range.to + '&trend_to=' + trendTo)
       .then(r => { if (live) { setData(r); setErr(null); } })
       .catch(e => { if (live && !(e instanceof AuthError)) setErr(e.message); });
     return () => { live = false; };
-  }, [range.from, range.to]);
+  }, [range.from, range.to, trendTo]);
 
   const maxMonth = data ? Math.max(1, ...data.months.map(m => m.spending)) : 1;
 
@@ -1672,14 +1687,20 @@ function ReportsView({ onDrill }) {
 
         <div className="card">
           <h2>Spending by month</h2>
-          <div className="month-bars" role="img" aria-label="Monthly spending, last 12 months">
-            {data.months.map(m => (
-              <div key={m.month} className="mbar" data-tip={monthLabel(m.month).replace(' 1', '') + ': spent ' + fmtCents(m.spending) + ' · income ' + fmtCents(m.income)}>
-                <div className="mbar-track"><div className="mbar-fill" style={{ height: Math.max(0, m.spending) / maxMonth * 100 + '%' }} /></div>
-                <div className="mbar-label">{parseIso(m.month + '-01').toLocaleDateString('en-US', { month: 'short' })}</div>
-              </div>
-            ))}
+          <div className={'month-bars' + (kind === 'month' ? ' has-sel' : '')} role="group" aria-label="Monthly spending, last 12 months — choose a month to view it">
+            {data.months.map(m => {
+              const sel = kind === 'month' && range.from.slice(0, 7) === m.month;
+              const tip = monthLabel(m.month).replace(' 1', '') + ': spent ' + fmtCents(m.spending) + ' · income ' + fmtCents(m.income);
+              return (
+                <button type="button" key={m.month} className={'mbar' + (sel ? ' sel' : '')} data-tip={tip} aria-label={tip} aria-pressed={sel}
+                  onClick={() => { if (!sel) pickMonth(m.month); }}>
+                  <div className="mbar-track"><div className="mbar-fill" style={{ height: Math.max(0, m.spending) / maxMonth * 100 + '%' }} /></div>
+                  <div className="mbar-label">{parseIso(m.month + '-01').toLocaleDateString('en-US', { month: 'short' })}</div>
+                </button>
+              );
+            })}
           </div>
+          {data.months.length >= 2 && <p className="muted acct-meta" style={{ marginBottom: 0 }}>Click a month to see its report.</p>}
           {data.months.length < 2 && <p className="muted acct-meta">This fills in as more months of history load.</p>}
         </div>
 

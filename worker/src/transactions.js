@@ -252,7 +252,10 @@ export async function reportSummary(env, user, q) {
   await ensureReady(env, user.household_id);
   const base = [user.id, user.household_id];
   const EXPENSE = `t.is_transfer = 0 AND t.is_income = 0`;
-  const trendFrom = monthsBack(to, 12);
+  // Spending-by-month chart window: the 12 months ending at trend_to (front end pins it to
+  // the current month so clicking a bar doesn't slide later months off). Defaults to `to`.
+  const trendTo = DATE_RE.test(q.get('trend_to') || '') ? q.get('trend_to') : to;
+  const trendFrom = monthsBack(trendTo, 12);
   const [byCat, totals, months, merchants, uncategorized, incomeByCat, byTag, untagged] = await env.DB.batch([
     env.DB.prepare(
       `SELECT t.category_id, c.name, c.parent_id, pc.name AS parent_name, c.budget_monthly,
@@ -272,7 +275,7 @@ export async function reportSummary(env, user, q) {
               COALESCE(SUM(CASE WHEN t.is_income = 1 THEN -t.amount ELSE 0 END), 0) AS income
          ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ?
         GROUP BY month ORDER BY month`
-    ).bind(...base, trendFrom, to),
+    ).bind(...base, trendFrom, trendTo),
     env.DB.prepare(
       `SELECT COALESCE(t.merchant_name, t.name) AS merchant, SUM(t.amount) AS total, COUNT(*) AS n
          ${TX_FROM} WHERE ${TX_VISIBLE} AND t.eff_date >= ? AND t.eff_date <= ? AND ${EXPENSE}
