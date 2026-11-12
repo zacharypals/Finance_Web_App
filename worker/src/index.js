@@ -26,9 +26,9 @@ import {
 import { getPlan, putTemplate, createBucket, patchBucket, reorderBuckets, seedBuckets, putCell, putPaycheck, refreshCards } from './plan.js';
 
 import { listTags, createTag, patchTag, deleteTag, plaidCodes } from './tags.js';
-import { listExpenses, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
+import { listExpenses, putExpenseSettings, createExpense, patchExpense, deleteExpense, createPool, patchPool, deletePool, importBudgetV2 } from './expenses.js';
 
-const WORKER_VERSION = '0.11.0';
+const WORKER_VERSION = '0.12.0';
 const SESSION_DAYS = 90;          // sliding: extended on use, at most once per day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -128,6 +128,7 @@ async function routeApi(req, env, ctx, url, user) {
   if (path === '/api/expenses' && method === 'GET') return listExpenses(env, user);
   if (path === '/api/expenses' && method === 'POST') return createExpense(env, user, await body());
   if (path === '/api/expenses/import-v2' && method === 'POST') return importBudgetV2(env, user);
+  if (path === '/api/expenses/settings' && method === 'PUT') return putExpenseSettings(env, user, await body());
   const em = path.match(/^\/api\/expenses\/([^/]+)$/);
   if (em && method === 'PATCH') return patchExpense(env, user, em[1], await body());
   if (em && method === 'DELETE') return deleteExpense(env, user, em[1]);

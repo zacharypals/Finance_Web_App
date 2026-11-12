@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.12.0 -->
+<!-- Finance Pal v0.13.0 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -363,7 +363,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.12.0';
+const APP_VERSION = '0.13.0';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -2523,8 +2523,9 @@ function PlanView() {
 // ─────────────────────────────────────────────
 // EXPENSES
 // ─────────────────────────────────────────────
-// Per paycheck = monthly ÷ 4, rounded up to the dollar (on purpose: live on 4 paychecks a month).
-const perPaycheck = (monthlyCents) => Math.ceil(monthlyCents / 4 / 100) * 100;
+// Per paycheck = monthly ÷ weeks-per-month (a setting, default 4.25), rounded up to the dollar.
+// Must match perPaycheck() in worker/src/expenses.js.
+const perPaycheck = (monthlyCents, wpm) => Math.max(0, Math.ceil(monthlyCents / wpm / 100 - 1e-9)) * 100;
 
 function PaidFromSelect({ value, buckets, pools, onChange }) {
   return (
@@ -2536,7 +2537,7 @@ function PaidFromSelect({ value, buckets, pools, onChange }) {
   );
 }
 
-function ExpenseRow({ e, buckets, pools, onSave, onDelete }) {
+function ExpenseRow({ e, wpm, buckets, pools, onSave, onDelete }) {
   const [name, setName] = useState(e.name);
   const [monthly, setMonthly] = useState(dollarsInput(e.monthly_amount));
   useEffect(() => { setName(e.name); setMonthly(dollarsInput(e.monthly_amount)); }, [e.name, e.monthly_amount]);
@@ -2552,7 +2553,7 @@ function ExpenseRow({ e, buckets, pools, onSave, onDelete }) {
         onChange={x => setMonthly(x.target.value)}
         onBlur={() => { const c = monthly.trim() === '' ? 0 : cents; if (c !== null && c !== e.monthly_amount) commit({ monthly_amount: c }); else setMonthly(dollarsInput(e.monthly_amount)); }}
         onKeyDown={x => x.key === 'Enter' && x.target.blur()} /></td>
-      <td className="num">{fmtCents(perPaycheck(cents === null ? e.monthly_amount : (monthly.trim() === '' ? 0 : cents)))}</td>
+      <td className="num">{fmtCents(perPaycheck(cents === null ? e.monthly_amount : (monthly.trim() === '' ? 0 : cents), wpm))}</td>
       <td><PaidFromSelect value={paidFrom} buckets={buckets} pools={pools} onChange={v => commit({ paid_from: v || null })} /></td>
       <td><button className="btn-text" aria-label={'Delete ' + e.name} onClick={() => onDelete(e)}>✕</button></td>
     </tr>
@@ -2602,9 +2603,10 @@ function ExpensesView() {
   const [newGroup, setNewGroup] = useState('');
   const [poolEdit, setPoolEdit] = useState(null);       // pool id or 'new'
   const [openSug, setOpenSug] = useState(null);
+  const [wpmText, setWpmText] = useState('');
 
   const load = useCallback(async () => {
-    try { setData(await api('/api/expenses')); }
+    try { const d = await api('/api/expenses'); setData(d); setWpmText(String(d.weeks_per_month)); }
     catch (e) { if (!(e instanceof AuthError)) setNotice({ kind: 'err', text: 'Couldn’t load expenses: ' + e.message }); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -2626,6 +2628,10 @@ function ExpensesView() {
   if (!data) return <div className="card">{notice ? <div className="error-box">{notice.text}</div> : <div className="spinner" style={{ margin: '24px auto' }} />}</div>;
 
   const t = data.totals;
+  const wpm = data.weeks_per_month;
+  const wpmNew = Number(wpmText);
+  const wpmValid = wpmText.trim() !== '' && Number.isFinite(wpmNew) && wpmNew >= 4 && wpmNew <= 4.5;
+  const wpmChanged = wpmValid && Math.round(wpmNew * 100) / 100 !== wpm;
   const groups = [...new Set(data.expenses.map(e => e.group_name))];
   const left = t.paycheck ? t.paycheck - t.per_paycheck : null;
   const sugs = data.suggestions.slice().sort((a, b) => b.suggested - a.suggested);
@@ -2635,19 +2641,30 @@ function ExpensesView() {
     <>
       <div className="tiles">
         <div className="tile tile-hero"><div className="tile-label">Monthly expenses</div><div className="tile-value">{fmtCents(t.monthly)}</div></div>
-        <div className="tile"><div className="tile-label">Per paycheck (÷ 4)</div><div className="tile-value">{fmtCents(t.per_paycheck)}</div></div>
+        <div className="tile"><div className="tile-label">Per paycheck (÷ {wpm})</div><div className="tile-value">{fmtCents(t.per_paycheck)}</div></div>
         <div className="tile"><div className="tile-label">Your paycheck</div><div className="tile-value">{t.paycheck ? fmtCents(t.paycheck) : '—'}</div></div>
         <div className="tile"><div className="tile-label">{left !== null && left < 0 ? 'Over by, per paycheck' : 'Left per paycheck'}</div>
           <div className={'tile-value' + (left !== null && left < 0 ? ' neg' : '')}>{left !== null ? fmtCents(Math.abs(left)) : '—'}</div></div>
-        {t.paycheck && <div className="tile"><div className="tile-label">Bonus paychecks a year</div>
-          <div className="tile-value">{t.extra_paychecks_per_year} ≈ {fmtCents(t.extra_paychecks_per_year * t.paycheck)}</div></div>}
+        <div className="tile"><div className="tile-label">Cushion built in, per year</div>
+          <div className={'tile-value' + (t.yearly_cushion < 0 ? ' neg' : '')}>{t.yearly_cushion < 0 ? '−' : ''}{fmtCents(Math.abs(t.yearly_cushion))}</div></div>
+      </div>
+      <div className="card">
+        <h2 style={{ marginTop: 0 }}>Weeks per month</h2>
+        <p className="muted acct-meta" style={{ marginTop: -6 }}>Each expense is divided by this to get its per-paycheck amount (then rounded up to the dollar). Paid weekly, 52 ÷ 12 = 4.33 funds the year exactly; lower leaves a cushion (4 was the old rule). Your Plan amounts don’t change by themselves — use <b>Use</b> below to copy new ones over.</p>
+        <div className="inline-form" style={{ marginTop: 0 }}>
+          <label>Weeks per month<input type="text" inputMode="decimal" style={{ width: 90 }} value={wpmText} aria-label="Weeks per month"
+            onChange={x => setWpmText(x.target.value)} onKeyDown={x => x.key === 'Enter' && wpmChanged && x.target.blur()} /></label>
+          <button className="btn-secondary" disabled={busy || !wpmChanged}
+            onClick={() => run(() => api('/api/expenses/settings', { method: 'PUT', body: JSON.stringify({ weeks_per_month: wpmNew }) }), r => 'Weeks per month is now ' + r.weeks_per_month + '.')}>Save</button>
+          {wpmText.trim() !== '' && !wpmValid && <span className="acct-meta neg">Enter a number from 4 to 4.5.</span>}
+        </div>
       </div>
       {notice && <div className={notice.kind === 'err' ? 'error-box' : 'ok-box'}>{notice.text}</div>}
 
       {data.expenses.length === 0 && (
         <div className="card">
           <h1>Expenses</h1>
-          <p className="muted">List your recurring costs and where each is paid from. Finance Pal works out what each bucket needs per paycheck — monthly ÷ 4, rounded up.</p>
+          <p className="muted">List your recurring costs and where each is paid from. Finance Pal works out what each bucket needs per paycheck — monthly ÷ weeks per month, rounded up.</p>
           <div className="btn-row">
             <button className="btn-primary btn-inline" disabled={busy} onClick={() => run(() => api('/api/expenses/import-v2', { method: 'POST' }),
               r => 'Imported ' + r.created + ' expenses from Budget v2.' + (r.unmatched.length ? ' Couldn’t find a bucket for: ' + r.unmatched.join(', ') + ' — pick one in “Paid from”.' : ''))}>Import from Budget v2</button>
@@ -2699,12 +2716,12 @@ function ExpensesView() {
                   <table className="exp">
                     <thead><tr><th>Expense</th><th>Monthly</th><th>Per paycheck</th><th>Paid from</th><th /></tr></thead>
                     <tbody>
-                      {list.map(e => <ExpenseRow key={e.id} e={e} buckets={data.buckets} pools={data.pools} onSave={save} onDelete={del} />)}
+                      {list.map(e => <ExpenseRow key={e.id} e={e} wpm={wpm} buckets={data.buckets} pools={data.pools} onSave={save} onDelete={del} />)}
                       {adding === g ? (
                         <tr className="adding">
                           <td><input type="text" className="cell cell-name" autoFocus placeholder="Name" value={newExp.name} onChange={x => setNewExp(n => ({ ...n, name: x.target.value }))} onKeyDown={x => x.key === 'Enter' && addExpense(g)} /></td>
                           <td><input type="text" inputMode="decimal" className="cell" placeholder="0" value={newExp.monthly} onChange={x => setNewExp(n => ({ ...n, monthly: x.target.value }))} onKeyDown={x => x.key === 'Enter' && addExpense(g)} /></td>
-                          <td className="num">{fmtCents(perPaycheck(toCents(newExp.monthly) || 0))}</td>
+                          <td className="num">{fmtCents(perPaycheck(toCents(newExp.monthly) || 0, wpm))}</td>
                           <td><PaidFromSelect value={newExp.paid_from} buckets={data.buckets} pools={data.pools} onChange={v => setNewExp(n => ({ ...n, paid_from: v }))} /></td>
                           <td className="btn-row" style={{ flexWrap: 'nowrap' }}><button className="btn-secondary" disabled={busy} onClick={() => addExpense(g)}>Add</button><button className="btn-text" onClick={() => setAdding(null)}>✕</button></td>
                         </tr>
@@ -2727,7 +2744,7 @@ function ExpensesView() {
               <table className="exp"><tbody><tr className="adding">
                 <td><input type="text" className="cell cell-name" autoFocus placeholder="Name" value={newExp.name} onChange={x => setNewExp(n => ({ ...n, name: x.target.value }))} /></td>
                 <td><input type="text" inputMode="decimal" className="cell" placeholder="0" value={newExp.monthly} onChange={x => setNewExp(n => ({ ...n, monthly: x.target.value }))} /></td>
-                <td className="num">{fmtCents(perPaycheck(toCents(newExp.monthly) || 0))}</td>
+                <td className="num">{fmtCents(perPaycheck(toCents(newExp.monthly) || 0, wpm))}</td>
                 <td><PaidFromSelect value={newExp.paid_from} buckets={data.buckets} pools={data.pools} onChange={v => setNewExp(n => ({ ...n, paid_from: v }))} /></td>
                 <td><button className="btn-secondary" disabled={busy} onClick={() => addExpense(adding)}>Add</button></td>
               </tr></tbody></table>

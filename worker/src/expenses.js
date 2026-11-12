@@ -1,13 +1,18 @@
 // Expenses: recurring costs → what each needs per paycheck → which bucket pays it.
 //
-// Per-paycheck rule (Zachary's, on purpose): monthly ÷ 4, rounded UP to the whole dollar —
-// the same as CEILING(D/4, 1) in Budget v2. Living on 4 paychecks a month leaves the
-// 4 extra weekly paychecks each year (52 − 48) as a bonus.
+// Per-paycheck rule (Zachary's, on purpose): monthly ÷ "weeks per month", rounded UP to the
+// whole dollar (CEILING(D/w, 1) like Budget v2). The divider is a setting (households.weeks_per_month,
+// default 4.25 since v0.13.0; it was a fixed 4). 52 ÷ 12 = 4.33 funds the year exactly; anything
+// lower leaves a cushion, and the round-up adds a little more.
 // Split pools work like the sheet's Chase/Wells column: sum the pool's expenses, then each
 // bucket gets CEILING(total × pct, 1).
 import { json } from './util.js';
 
-export const perPaycheck = (monthlyCents) => Math.ceil(monthlyCents / 4 / 100) * 100;
+export const DEFAULT_WPM = 4.25;
+export const WPM_MIN = 4, WPM_MAX = 4.5;
+// The 1e-9 keeps a result that is exactly whole dollars (e.g. $425 ÷ 4.25) from rounding up a dollar;
+// Math.max(0, …) keeps a $0 expense at 0 rather than -0 (which the page would print as "-$0.00").
+export const perPaycheck = (monthlyCents, wpm = DEFAULT_WPM) => Math.max(0, Math.ceil(monthlyCents / wpm / 100 - 1e-9)) * 100;
 const poolShare = (totalCents, pct) => Math.ceil(totalCents * pct / 100 / 100 - 1e-9) * 100;
 const SCOPE = (t) => `((${t}.scope_type = 'user' AND ${t}.scope_id = ?) OR (${t}.scope_type = 'household' AND ${t}.scope_id = ?))`;
 const MAX = 1e9;
@@ -23,7 +28,7 @@ async function poolOk(env, user, id) {
 
 export async function listExpenses(env, user) {
   const s = [user.id, user.household_id];
-  const [exp, pools, shares, buckets, tpl] = await env.DB.batch([
+  const [exp, pools, shares, buckets, tpl, hh] = await env.DB.batch([
     env.DB.prepare(`SELECT e.* FROM expenses e WHERE ${SCOPE('e')} ORDER BY e.sort, e.created_at`).bind(...s),
     env.DB.prepare(`SELECT p.* FROM expense_pools p WHERE ${SCOPE('p')} ORDER BY p.created_at`).bind(...s),
     env.DB.prepare(`SELECT ps.* FROM pool_shares ps JOIN expense_pools p ON p.id = ps.pool_id WHERE ${SCOPE('p')}`).bind(...s),
@@ -33,8 +38,10 @@ export async function listExpenses(env, user) {
          LEFT JOIN template_allocations ta ON ta.template_id = pt.id AND ta.bucket_id = b.id
         WHERE ${SCOPE('b')} ORDER BY b.sort, b.name`).bind(user.id, ...s),
     env.DB.prepare('SELECT expected_total, cadence FROM paycheck_templates WHERE user_id = ? AND active = 1 LIMIT 1').bind(user.id),
+    env.DB.prepare('SELECT weeks_per_month FROM households WHERE id = ?').bind(user.household_id),
   ]);
-  const expenses = exp.results.map((e) => ({ ...e, per_paycheck: perPaycheck(e.monthly_amount) }));
+  const wpm = (hh.results[0] && hh.results[0].weeks_per_month) || DEFAULT_WPM;
+  const expenses = exp.results.map((e) => ({ ...e, per_paycheck: perPaycheck(e.monthly_amount, wpm) }));
   const poolList = pools.results.map((p) => ({ ...p, shares: shares.results.filter((x) => x.pool_id === p.id) }));
 
   // What the expenses imply for each bucket.
@@ -58,15 +65,29 @@ export async function listExpenses(env, user) {
   const t = tpl.results[0] || {};
   const monthly = expenses.reduce((x, e) => x + e.monthly_amount, 0);
   const weekly = expenses.reduce((x, e) => x + e.per_paycheck, 0);
+  const perYear = t.cadence === 'biweekly' ? 26 : 52;
   return json({
     expenses, pools: poolList, suggestions,
     buckets: buckets.results.filter((b) => !b.archived).map((b) => ({ id: b.id, name: b.name, kind: b.kind, weekly_amount: b.weekly_amount || 0 })),
+    weeks_per_month: wpm,
     totals: {
       monthly, per_paycheck: weekly, paycheck: t.expected_total || null,
-      extra_paychecks_per_year: t.cadence === 'biweekly' ? 2 : 4,  // 52 − 48 weekly, or 26 − 24 every other week
+      // What the plan sets aside over a year beyond a year of expenses (divider cushion + round-up).
+      yearly_cushion: perYear * weekly - 12 * monthly,
       unassigned: expenses.filter((e) => !e.bucket_id && !e.pool_id && e.monthly_amount > 0).length,
     },
   });
+}
+
+// PUT /api/expenses/settings { weeks_per_month } — the divider for "per paycheck".
+export async function putExpenseSettings(env, user, body) {
+  const raw = Number(body && body.weeks_per_month);
+  const w = Math.round(raw * 100) / 100;
+  if (!Number.isFinite(raw) || w < WPM_MIN || w > WPM_MAX) {
+    return json({ error: 'bad_request', message: `Weeks per month must be between ${WPM_MIN} and ${WPM_MAX}.` }, 400);
+  }
+  await env.DB.prepare('UPDATE households SET weeks_per_month = ? WHERE id = ?').bind(w, user.household_id).run();
+  return json({ weeks_per_month: w });
 }
 
 function clean(body, existing) {
