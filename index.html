@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.13.0 -->
+<!-- Finance Pal v0.13.1 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -363,7 +363,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.13.0';
+const APP_VERSION = '0.13.1';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
@@ -2604,6 +2604,8 @@ function ExpensesView() {
   const [poolEdit, setPoolEdit] = useState(null);       // pool id or 'new'
   const [openSug, setOpenSug] = useState(null);
   const [wpmText, setWpmText] = useState('');
+  const [expSort, setExpSort] = useState(() => lsGet('fp_expense_sort') || 'name');   // name | amount | paid (remembered on this device)
+  const chooseExpSort = (v) => { setExpSort(v); lsSet('fp_expense_sort', v); };
 
   const load = useCallback(async () => {
     try { const d = await api('/api/expenses'); setData(d); setWpmText(String(d.weeks_per_month)); }
@@ -2633,6 +2635,16 @@ function ExpensesView() {
   const wpmValid = wpmText.trim() !== '' && Number.isFinite(wpmNew) && wpmNew >= 4 && wpmNew <= 4.5;
   const wpmChanged = wpmValid && Math.round(wpmNew * 100) / 100 !== wpm;
   const groups = [...new Set(data.expenses.map(e => e.group_name))];
+  // Each group is sorted by the chosen option; ties fall back to name. "Paid from" groups by the bucket/pool name, unassigned last.
+  const expByName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const paidLabel = (e) => e.bucket_id ? (data.buckets.find(b => b.id === e.bucket_id) || {}).name || '' : e.pool_id ? (data.pools.find(p => p.id === e.pool_id) || {}).name || '' : '';
+  const expSorter = expSort === 'amount' ? (a, b) => b.monthly_amount - a.monthly_amount || expByName(a, b)
+    : expSort === 'paid' ? (a, b) => {
+        const x = paidLabel(a), y = paidLabel(b);
+        if (!x !== !y) return x ? -1 : 1;
+        return x.localeCompare(y, undefined, { sensitivity: 'base', numeric: true }) || expByName(a, b);
+      }
+    : expByName;
   const left = t.paycheck ? t.paycheck - t.per_paycheck : null;
   const sugs = data.suggestions.slice().sort((a, b) => b.suggested - a.suggested);
   const bucketsById = Object.fromEntries(data.buckets.map(b => [b.id, b]));
@@ -2704,10 +2716,17 @@ function ExpensesView() {
         <div className="card">
           <div className="row-between">
             <h2 style={{ margin: 0 }}>Expenses</h2>
-            {t.unassigned > 0 && <span className="pill pill-warn">{t.unassigned} not assigned to a bucket</span>}
+            <div className="btn-row">
+              {t.unassigned > 0 && <span className="pill pill-warn">{t.unassigned} not assigned to a bucket</span>}
+              <span className="muted acct-meta">Sort</span>
+              <div className="seg">
+                {[['name', 'Name'], ['amount', 'Amount'], ['paid', 'Paid from']].map(([k, l]) =>
+                  <button key={k} className={expSort === k ? 'active' : ''} onClick={() => chooseExpSort(k)}>{l}</button>)}
+              </div>
+            </div>
           </div>
           {(groups.length ? groups : ['Other']).map(g => {
-            const list = data.expenses.filter(e => e.group_name === g);
+            const list = data.expenses.filter(e => e.group_name === g).sort(expSorter);
             const m = list.reduce((x, e) => x + e.monthly_amount, 0);
             return (
               <div key={g}>
