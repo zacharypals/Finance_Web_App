@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.13.2 -->
+<!-- Finance Pal v0.13.3 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -38,6 +38,7 @@
   --nav-h: 56px;
   --chart-line: #16805a;   /* validated: chroma/contrast pass on light surface */
   --chart-grid: #e8ecea;
+  --strike: #d9661a;       /* Plan grid: line through done cells */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -46,6 +47,7 @@
     --red: #e0675b; --red-light: #3a2220;
     --chart-line: #3fa37c; /* validated on dark surface */
     --chart-grid: #26302b;
+    --strike: #ff9d5c;
   }
 }
 * { box-sizing: border-box; }
@@ -289,7 +291,7 @@ input[type=text], input[type=date], input[type=number], select {
 .plan .cell:hover { border-color: var(--border); }
 .plan .cell:focus { border-color: var(--accent); background: var(--paper); color: var(--ink); outline: none; }
 .plan .cell.override { color: var(--ink); font-weight: 600; }
-.plan td.done .cell { text-decoration: line-through; text-decoration-color: var(--accent); text-decoration-thickness: 2px; }
+.plan td.done .cell { text-decoration: line-through; text-decoration-color: var(--strike); text-decoration-thickness: 2px; }
 .plan tfoot td { font-weight: 600; }
 .plan tfoot tr.left td { border-bottom: 0; }
 .plan td.neg { color: var(--red); }
@@ -363,7 +365,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.13.2';
+const APP_VERSION = '0.13.3';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
