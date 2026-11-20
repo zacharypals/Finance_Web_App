@@ -1,4 +1,4 @@
-<!-- Finance Pal v0.13.1 -->
+<!-- Finance Pal v0.13.2 -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -289,7 +289,7 @@ input[type=text], input[type=date], input[type=number], select {
 .plan .cell:hover { border-color: var(--border); }
 .plan .cell:focus { border-color: var(--accent); background: var(--paper); color: var(--ink); outline: none; }
 .plan .cell.override { color: var(--ink); font-weight: 600; }
-.plan td.done .cell { text-decoration: line-through; text-decoration-color: var(--ink-faint); }
+.plan td.done .cell { text-decoration: line-through; text-decoration-color: var(--accent); text-decoration-thickness: 2px; }
 .plan tfoot td { font-weight: 600; }
 .plan tfoot tr.left td { border-bottom: 0; }
 .plan td.neg { color: var(--red); }
@@ -363,7 +363,7 @@ input[type=text], input[type=date], input[type=number], select {
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const APP_VERSION = '0.13.1';
+const APP_VERSION = '0.13.2';
 const C = window.FP_CONFIG, K = window.FP_KEYS;
 
 // ─────────────────────────────────────────────
